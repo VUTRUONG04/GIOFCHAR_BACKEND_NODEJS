@@ -4,6 +4,10 @@ class OutboxRepository {
     }
 
     async claimPendingBatch(batchSize = 10) {
+        if (!Number.isSafeInteger(batchSize) || batchSize < 1) {
+            throw new RangeError("batchSize must be a positive safe integer");
+        }
+
         const connection = await this.pool.getConnection();
 
         try {
@@ -14,9 +18,9 @@ class OutboxRepository {
                     WHERE status = 'pending'
                         AND next_retry_at <= NOW()
                     ORDER BY created_at ASC
-                    LIMIT ?
+                    LIMIT ${batchSize}
                     FOR UPDATE SKIP LOCKED
-                `, [batchSize]);
+                `);
 
             if (events.length === 0) {
                 await connection.commit();

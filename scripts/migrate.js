@@ -1,5 +1,4 @@
 import dotenv from "dotenv";
-dotenv.config();
 
 import fs from "fs";
 import path from "path";
@@ -8,6 +7,19 @@ import mysql from "mysql2/promise";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const isTestMigration = process.argv.includes("--test");
+const envPath = path.join(__dirname, "..", isTestMigration ? ".env.test" : ".env");
+const envResult = dotenv.config({ path: envPath, override: isTestMigration });
+
+if (isTestMigration && envResult.error) {
+  console.error("Missing .env.test. Copy .env.test.example and configure the MySQL credentials.");
+  process.exit(1);
+}
+
+if (isTestMigration && !process.env.DB_NAME?.toLowerCase().endsWith("_test")) {
+  console.error("Refusing to migrate: DB_NAME in .env.test must end with '_test'.");
+  process.exit(1);
+}
 
 async function runMigrations() {
   console.log("🚀 Starting database migrations...");

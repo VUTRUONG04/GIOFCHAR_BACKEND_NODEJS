@@ -6,6 +6,7 @@
     "dev": "nodemon ./src/index.js",
     "start": "node ./src/index.js",
     "db:migrate": "node ./scripts/migrate.js",
+    "db:migrate:test": "node ./scripts/migrate.js --test",
     "db:seed": "node ./scripts/seed.js",
     "db:setup": "node ./scripts/migrate.js && node ./scripts/seed.js",
     "test": "vitest run",
