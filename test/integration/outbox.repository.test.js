@@ -96,6 +96,68 @@ describe("OutboxRepository (MySQL integration)", () => {
     await expect(repository.claimPendingBatch()).resolves.toEqual([]);
   });
 
+  it("skips a pending event locked by another transaction", async () => {
+    const lockedEventId = await insertTestEvent();
+    const availableEventId = await insertTestEvent();
+
+    await testPool.execute(
+      `UPDATE outbox_events
+       SET created_at = DATE_SUB(NOW(), INTERVAL 2 MINUTE)
+       WHERE event_id = ?`,
+      [lockedEventId],
+    );
+    await testPool.execute(
+      `UPDATE outbox_events
+       SET created_at = DATE_SUB(NOW(), INTERVAL 1 MINUTE)
+       WHERE event_id = ?`,
+      [availableEventId],
+    );
+
+    const lockConnection = await testPool.getConnection();
+
+    try {
+      await lockConnection.beginTransaction();
+      const [lockedRows] = await lockConnection.execute(
+        `SELECT id
+         FROM outbox_events
+         WHERE event_id = ?
+         FOR UPDATE`,
+        [lockedEventId],
+      );
+      expect(lockedRows).toHaveLength(1);
+
+      const claimedEvents = await repository.claimPendingBatch(1);
+
+      expect(claimedEvents.map(({ event_id }) => event_id)).toEqual([
+        availableEventId,
+      ]);
+
+      const [eventStates] = await testPool.execute(
+        `SELECT event_id, status, attempt_count
+         FROM outbox_events
+         WHERE event_id IN (?, ?)`,
+        [lockedEventId, availableEventId],
+      );
+      expect(eventStates).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event_id: lockedEventId,
+            status: "pending",
+            attempt_count: 0,
+          }),
+          expect.objectContaining({
+            event_id: availableEventId,
+            status: "processing",
+            attempt_count: 1,
+          }),
+        ]),
+      );
+    } finally {
+      await lockConnection.rollback();
+      lockConnection.release();
+    }
+  });
+
   it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "10"])(
     "rejects invalid batch size %s",
     async (batchSize) => {
