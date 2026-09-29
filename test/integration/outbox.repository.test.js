@@ -2,9 +2,11 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import mysql from "mysql2/promise";
 import { randomUUID } from "node:crypto";
 
+import outboxConstants from "../../src/constants/outbox.cjs";
 import OutboxRepository from "../../src/repositories/outbox.repository.js";
 
 const testAggregateType = "test_outbox_repository";
+const { OUTBOX_ERROR_CODES, OUTBOX_PROCESSING_TIMEOUT_ERROR } = outboxConstants;
 const testPool = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -96,6 +98,108 @@ describe("OutboxRepository (MySQL integration)", () => {
     await expect(repository.claimPendingBatch()).resolves.toEqual([]);
   });
 
+  it("marks a processing event as completed", async () => {
+    const eventId = await insertTestEvent({ status: "processing" });
+
+    await expect(repository.markCompleted(eventId)).resolves.toBe(true);
+
+    const [events] = await testPool.execute(
+      `SELECT status, processing_started_at, processed_at, last_error
+       FROM outbox_events
+       WHERE event_id = ?`,
+      [eventId],
+    );
+    expect(events[0]).toMatchObject({
+      status: "completed",
+      processing_started_at: null,
+      last_error: null,
+    });
+    expect(events[0].processed_at).not.toBeNull();
+  });
+
+  it("returns an event to pending with retry details", async () => {
+    const eventId = await insertTestEvent({ status: "processing" });
+    const nextRetryAt = "2030-05-06 07:08:09";
+    const lastError = "Temporary email provider failure";
+
+    await expect(
+      repository.markRetry(eventId, { nextRetryAt, lastError }),
+    ).resolves.toBe(true);
+
+    const [events] = await testPool.execute(
+      `SELECT status,
+              DATE_FORMAT(next_retry_at, '%Y-%m-%d %H:%i:%s') AS next_retry_at,
+              processing_started_at,
+              processed_at,
+              last_error
+       FROM outbox_events
+       WHERE event_id = ?`,
+      [eventId],
+    );
+    expect(events[0]).toMatchObject({
+      status: "pending",
+      next_retry_at: nextRetryAt,
+      processing_started_at: null,
+      processed_at: null,
+      last_error: lastError,
+    });
+  });
+
+  it("marks a processing event as failed with the last error", async () => {
+    const eventId = await insertTestEvent({ status: "processing" });
+    const lastError = "Permanent email provider failure";
+
+    await expect(
+      repository.markFailed(eventId, { lastError }),
+    ).resolves.toBe(true);
+
+    const [events] = await testPool.execute(
+      `SELECT status, processing_started_at, last_error
+       FROM outbox_events
+       WHERE event_id = ?`,
+      [eventId],
+    );
+    expect(events[0]).toMatchObject({
+      status: "failed",
+      processing_started_at: null,
+      last_error: lastError,
+    });
+  });
+
+  it("rejects status updates for events that are not processing", async () => {
+    const eventId = await insertTestEvent();
+
+    await expect(repository.markCompleted(eventId)).rejects.toMatchObject({
+      code: OUTBOX_ERROR_CODES.EVENT_NOT_PROCESSING,
+      eventId,
+    });
+  });
+
+  it("rejects invalid retry details", async () => {
+    const eventId = await insertTestEvent({ status: "processing" });
+
+    await expect(
+      repository.markRetry(eventId, {
+        nextRetryAt: new Date(Number.NaN),
+        lastError: "Temporary failure",
+      }),
+    ).rejects.toThrow("nextRetryAt must be a valid Date or non-empty string");
+    await expect(
+      repository.markRetry(eventId, {
+        nextRetryAt: "2030-05-06 07:08:09",
+        lastError: " ",
+      }),
+    ).rejects.toThrow("lastError must be a non-empty string");
+  });
+
+  it("rejects an empty error when marking an event failed", async () => {
+    const eventId = await insertTestEvent({ status: "processing" });
+
+    await expect(
+      repository.markFailed(eventId, { lastError: "" }),
+    ).rejects.toThrow("lastError must be a non-empty string");
+  });
+
   it("skips a pending event locked by another transaction", async () => {
     const lockedEventId = await insertTestEvent();
     const availableEventId = await insertTestEvent();
@@ -157,6 +261,72 @@ describe("OutboxRepository (MySQL integration)", () => {
       lockConnection.release();
     }
   });
+
+  it("requeues only processing events older than the timeout", async () => {
+    const staleEventId = await insertTestEvent({ status: "processing" });
+    const activeEventId = await insertTestEvent({ status: "processing" });
+    const pendingEventId = await insertTestEvent();
+
+    await testPool.execute(
+      `UPDATE outbox_events
+       SET processing_started_at = DATE_SUB(NOW(), INTERVAL 2 MINUTE)
+       WHERE event_id = ?`,
+      [staleEventId],
+    );
+    await testPool.execute(
+      `UPDATE outbox_events
+       SET processing_started_at = NOW()
+       WHERE event_id = ?`,
+      [activeEventId],
+    );
+
+    await expect(repository.recoverStaleProcessing(60)).resolves.toBe(true);
+
+    const [events] = await testPool.execute(
+      `SELECT event_id,
+              status,
+              processing_started_at,
+              last_error,
+              next_retry_at <= NOW() AS retry_is_due
+       FROM outbox_events
+       WHERE event_id IN (?, ?, ?)`,
+      [staleEventId, activeEventId, pendingEventId],
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event_id: staleEventId,
+          status: "pending",
+          processing_started_at: null,
+          last_error: OUTBOX_PROCESSING_TIMEOUT_ERROR,
+          retry_is_due: 1,
+        }),
+        expect.objectContaining({
+          event_id: activeEventId,
+          status: "processing",
+          last_error: null,
+        }),
+        expect.objectContaining({
+          event_id: pendingEventId,
+          status: "pending",
+          last_error: null,
+        }),
+      ]),
+    );
+    expect(
+      events.find(({ event_id }) => event_id === activeEventId)
+        .processing_started_at,
+    ).not.toBeNull();
+  });
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "60"])(
+    "rejects invalid recovery timeout %s",
+    async (timeout) => {
+      await expect(repository.recoverStaleProcessing(timeout)).rejects.toThrow(
+        "timeout must be a positive safe integer in seconds",
+      );
+    },
+  );
 
   it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "10"])(
     "rejects invalid batch size %s",
