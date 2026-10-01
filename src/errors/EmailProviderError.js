@@ -8,4 +8,4 @@ class EmailProviderError extends Error {
     }
 }
 
-module.exports = EmailProviderError;
+export default EmailProviderError;

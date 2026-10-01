@@ -3,7 +3,7 @@ class EmailProvider {
         to,
         subject,
         html,
-        idempotencyKey
+        idempotencyKey,
     }) {
         throw new Error("send() must be implemented");
     }
@@ -13,4 +13,4 @@ class EmailProvider {
     }
 }
 
-module.exports = EmailProvider;
+export default EmailProvider;

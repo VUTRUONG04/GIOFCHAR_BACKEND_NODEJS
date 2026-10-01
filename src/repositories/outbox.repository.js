@@ -11,7 +11,7 @@ class OutboxRepository {
 
     async createPendingEvent(
         { eventType, aggregateType, aggregateId, payload },
-        connection,
+        connection = this.pool
     ) {
         if (!connection || typeof connection.execute !== "function") {
             throw new TypeError("A transaction connection is required");
