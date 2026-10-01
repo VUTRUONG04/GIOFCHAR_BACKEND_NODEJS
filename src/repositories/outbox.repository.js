@@ -2,10 +2,42 @@ const {
     OUTBOX_ERROR_CODES,
     OUTBOX_PROCESSING_TIMEOUT_ERROR,
 } = require("../constants/outbox.cjs");
+const { randomUUID } = require("node:crypto");
 
 class OutboxRepository {
     constructor(pool) {
         this.pool = pool;
+    }
+
+    async createPendingEvent(
+        { eventType, aggregateType, aggregateId, payload },
+        connection,
+    ) {
+        if (!connection || typeof connection.execute !== "function") {
+            throw new TypeError("A transaction connection is required");
+        }
+        if (!eventType || !aggregateType || !Number.isSafeInteger(aggregateId) || aggregateId < 1) {
+            throw new TypeError("A valid event type, aggregate type, and aggregate ID are required");
+        }
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+            throw new TypeError("Event payload must be an object");
+        }
+
+        const eventId = randomUUID();
+        await connection.execute(
+            `INSERT INTO outbox_events
+                (event_id, event_type, aggregate_type, aggregate_id, payload, status)
+             VALUES (?, ?, ?, ?, ?, 'pending')`,
+            [
+                eventId,
+                eventType,
+                aggregateType,
+                aggregateId,
+                JSON.stringify(payload),
+            ],
+        );
+
+        return eventId;
     }
 
     async updateProcessingEvent(eventId, query, values = []) {

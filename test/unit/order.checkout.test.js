@@ -40,6 +40,9 @@ import paymentService from "../../src/services/payment.service.js";
 import order_itemService from "../../src/services/order_item.service.js";
 import { buildVnpayPaymentUrl } from "../../src/services/payments/vnpay.service.js";
 import { vnpayConfig } from "../../src/config/vnpay.js";
+import outboxConstants from "../../src/constants/outbox.cjs";
+
+const { OUTBOX_EVENT_TYPES } = outboxConstants;
 
 describe("orderService.checkout", () => {
     const MOCK_USER_ID = 20;
@@ -158,6 +161,28 @@ describe("orderService.checkout", () => {
             "pending",
         );
         expect(cartService.clearCart).toHaveBeenCalledWith(MOCK_CART_ID, conn);
+        expect(conn.execute).toHaveBeenCalledWith(
+            expect.stringContaining("INSERT INTO outbox_events"),
+            [
+                expect.any(String),
+                OUTBOX_EVENT_TYPES.ORDER_CREATED,
+                "order",
+                MOCK_COD_ORDER_ID,
+                JSON.stringify({
+                    orderId: MOCK_COD_ORDER_ID,
+                    orderCode: `DH${currentYear}-000099`,
+                    customerName: checkoutInput.customerName,
+                    email: checkoutInput.email,
+                    totalPriceOrder: MOCK_TOTAL_PRICE,
+                    paymentMethod: "COD",
+                }),
+            ],
+        );
+        expect(
+            conn.execute.mock.invocationCallOrder[
+                conn.execute.mock.invocationCallOrder.length - 1
+            ],
+        ).toBeGreaterThan(cartService.clearCart.mock.invocationCallOrder[0]);
     });
 
     it("processes VNPAY payment successfully", async () => {
@@ -221,6 +246,23 @@ describe("orderService.checkout", () => {
             ipAddr: "127.0.0.1",
         });
         expect(cartService.clearCart).toHaveBeenCalledWith(MOCK_CART_ID, conn);
+        expect(conn.execute).toHaveBeenCalledWith(
+            expect.stringContaining("INSERT INTO outbox_events"),
+            [
+                expect.any(String),
+                OUTBOX_EVENT_TYPES.ORDER_CREATED,
+                "order",
+                MOCK_CARD_ORDER_ID,
+                JSON.stringify({
+                    orderId: MOCK_CARD_ORDER_ID,
+                    orderCode: `DH${currentYear}-000100`,
+                    customerName: checkoutInputCARD.customerName,
+                    email: checkoutInputCARD.email,
+                    totalPriceOrder: MOCK_TOTAL_PRICE,
+                    paymentMethod: "CARD",
+                }),
+            ],
+        );
     });
 
     it("throws OUT_OF_STOCK error and halts execution if stock is insufficient", async () => {

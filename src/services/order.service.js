@@ -1,4 +1,6 @@
 import pool from "../config/db.js";
+import OutboxRepository from "../repositories/outbox.repository.js";
+import outboxConstants from "../constants/outbox.cjs";
 import logger from "../config/logger.js";
 import { ORDER_STATUS, PAYMENT_STATUS } from "../constants/field.js";
 import {
@@ -23,6 +25,9 @@ import paymentService from "./payment.service.js";
 import { buildVnpayPaymentUrl } from "./payments/vnpay.service.js";
 import { validateOwner } from "./validators.js";
 import { deductStockForOrder } from "./variant.service.js";
+
+const outboxRepository = new OutboxRepository(pool);
+const { OUTBOX_EVENT_TYPES } = outboxConstants;
 
 const getAllOrders = async () => {
   const [rows] = await pool.execute(`
@@ -469,6 +474,23 @@ const checkout = async (
     });
   }
   await cartService.clearCart(cartId, conn);
+  await outboxRepository.createPendingEvent(
+    {
+      eventType: OUTBOX_EVENT_TYPES.ORDER_CREATED,
+      aggregateType: "order",
+      aggregateId: orderId,
+      payload: {
+        orderId,
+        orderCode,
+        customerName,
+        email,
+        totalPriceOrder,
+        paymentMethod,
+      },
+    },
+    conn,
+  );
+
   return {
     orderId,
     orderCode,

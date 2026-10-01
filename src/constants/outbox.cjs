@@ -6,7 +6,12 @@ const OUTBOX_ERROR_CODES = Object.freeze({
   CLAIM_COUNT_MISMATCH: "OUTBOX_CLAIM_COUNT_MISMATCH",
 });
 
+const OUTBOX_EVENT_TYPES = Object.freeze({
+  ORDER_CREATED: "order.created",
+});
+
 module.exports = {
   OUTBOX_ERROR_CODES,
+  OUTBOX_EVENT_TYPES,
   OUTBOX_PROCESSING_TIMEOUT_ERROR,
 };

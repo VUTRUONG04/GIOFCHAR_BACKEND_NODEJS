@@ -98,6 +98,57 @@ describe("OutboxRepository (MySQL integration)", () => {
     await expect(repository.claimPendingBatch()).resolves.toEqual([]);
   });
 
+  it("creates a pending event using the supplied transaction connection", async () => {
+    const connection = await testPool.getConnection();
+    let transactionStarted = false;
+    let eventId;
+
+    try {
+      await connection.beginTransaction();
+      transactionStarted = true;
+
+      eventId = await repository.createPendingEvent(
+        {
+          eventType: "test.transactional",
+          aggregateType: testAggregateType,
+          aggregateId: 1,
+          payload: { source: "integration-test" },
+        },
+        connection,
+      );
+
+      const [events] = await connection.execute(
+        `SELECT event_id, event_type, aggregate_type, aggregate_id, payload, status
+         FROM outbox_events
+         WHERE event_id = ?`,
+        [eventId],
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        event_id: eventId,
+        event_type: "test.transactional",
+        aggregate_type: testAggregateType,
+        aggregate_id: 1,
+        status: "pending",
+      });
+      expect(events[0].payload).toEqual({ source: "integration-test" });
+
+      await connection.rollback();
+      transactionStarted = false;
+
+      const [persistedEvents] = await testPool.execute(
+        "SELECT event_id FROM outbox_events WHERE event_id = ?",
+        [eventId],
+      );
+      expect(persistedEvents).toHaveLength(0);
+    } finally {
+      if (transactionStarted) {
+        await connection.rollback();
+      }
+      connection.release();
+    }
+  });
+
   it("marks a processing event as completed", async () => {
     const eventId = await insertTestEvent({ status: "processing" });
 
