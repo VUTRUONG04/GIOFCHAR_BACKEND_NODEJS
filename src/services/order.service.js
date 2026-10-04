@@ -3,10 +3,7 @@ import OutboxRepository from "../repositories/outbox.repository.js";
 import outboxConstants from "../constants/outbox.cjs";
 import logger from "../config/logger.js";
 import { ORDER_STATUS, PAYMENT_STATUS } from "../constants/field.js";
-import {
-  LOG_ACTIONS,
-  LOG_STATUSES,
-} from "../constants/logEvents.js";
+import { LOG_ACTIONS, LOG_STATUSES } from "../constants/logEvents.js";
 import {
   BadRequestError,
   ConflictError,
@@ -231,7 +228,7 @@ const updateOrderStatus = async (orderId, status, conn = pool) => {
   if (!ORDER_STATUS.includes(status))
     throw new BadRequestError("Invalid order status");
   await assertOrderUpdatable(orderId, conn); // check order đang ở một trạng thái cuối ko thể cập nhật lại: đã giao | đã hủy
-  const [result] = await conn.execute( 
+  const [result] = await conn.execute(
     "UPDATE orders o SET status = ? WHERE id = ?",
     [status, orderId],
   );
@@ -484,6 +481,8 @@ const checkout = async (
         orderCode,
         customerName,
         email,
+        phone,
+        address,
         totalPriceOrder,
         paymentMethod,
       },

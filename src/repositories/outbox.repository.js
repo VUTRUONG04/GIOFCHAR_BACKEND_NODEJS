@@ -1,72 +1,73 @@
 const {
-    OUTBOX_ERROR_CODES,
-    OUTBOX_PROCESSING_TIMEOUT_ERROR,
+  OUTBOX_ERROR_CODES,
+  OUTBOX_PROCESSING_TIMEOUT_ERROR,
 } = require("../constants/outbox.cjs");
 const { randomUUID } = require("node:crypto");
 
 class OutboxRepository {
-    constructor(pool) {
-        this.pool = pool;
+  constructor(pool) {
+    this.pool = pool;
+  }
+
+  async createPendingEvent(
+    { eventType, aggregateType, aggregateId, payload },
+    connection = this.pool,
+  ) {
+    if (!connection || typeof connection.execute !== "function") {
+      throw new TypeError("A transaction connection is required");
+    }
+    if (
+      !eventType ||
+      !aggregateType ||
+      !Number.isSafeInteger(aggregateId) ||
+      aggregateId < 1
+    ) {
+      throw new TypeError(
+        "A valid event type, aggregate type, and aggregate ID are required",
+      );
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new TypeError("Event payload must be an object");
     }
 
-    async createPendingEvent(
-        { eventType, aggregateType, aggregateId, payload },
-        connection = this.pool
-    ) {
-        if (!connection || typeof connection.execute !== "function") {
-            throw new TypeError("A transaction connection is required");
-        }
-        if (!eventType || !aggregateType || !Number.isSafeInteger(aggregateId) || aggregateId < 1) {
-            throw new TypeError("A valid event type, aggregate type, and aggregate ID are required");
-        }
-        if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-            throw new TypeError("Event payload must be an object");
-        }
-
-        const eventId = randomUUID();
-        await connection.execute(
-            `INSERT INTO outbox_events
+    const eventId = randomUUID();
+    await connection.execute(
+      `INSERT INTO outbox_events
                 (event_id, event_type, aggregate_type, aggregate_id, payload, status)
              VALUES (?, ?, ?, ?, ?, 'pending')`,
-            [
-                eventId,
-                eventType,
-                aggregateType,
-                aggregateId,
-                JSON.stringify(payload),
-            ],
-        );
+      [eventId, eventType, aggregateType, aggregateId, JSON.stringify(payload)],
+    );
 
-        return eventId;
+    return eventId;
+  }
+
+  async updateProcessingEvent(eventId, query, values = []) {
+    const [result] = await this.pool.execute(query, [...values, eventId]);
+
+    if (result.affectedRows !== 1) {
+      const error = new Error(
+        `Failed to update outbox event '${eventId}': event is missing or not processing`,
+      );
+      error.code = OUTBOX_ERROR_CODES.EVENT_NOT_PROCESSING;
+      error.eventId = eventId;
+      error.affectedRows = result.affectedRows;
+
+      throw error;
     }
 
-    async updateProcessingEvent(eventId, query, values = []) {
-        const [result] = await this.pool.execute(query, [...values, eventId]);
+    return true;
+  }
 
-        if (result.affectedRows !== 1) {
-            const error = new Error(
-                `Failed to update outbox event '${eventId}': event is missing or not processing`,
-            );
-            error.code = OUTBOX_ERROR_CODES.EVENT_NOT_PROCESSING;
-            error.eventId = eventId;
-            error.affectedRows = result.affectedRows;
-
-            throw error;
-        }
-
-        return true;
+  async claimPendingBatch(batchSize = 10) {
+    if (!Number.isSafeInteger(batchSize) || batchSize < 1) {
+      throw new RangeError("batchSize must be a positive safe integer");
     }
 
-    async claimPendingBatch(batchSize = 10) {
-        if (!Number.isSafeInteger(batchSize) || batchSize < 1) {
-            throw new RangeError("batchSize must be a positive safe integer");
-        }
+    const connection = await this.pool.getConnection();
 
-        const connection = await this.pool.getConnection();
-
-        try {
-            await connection.beginTransaction();
-            const [events] = await connection.execute(`
+    try {
+      await connection.beginTransaction();
+      const [events] = await connection.execute(`
                     SELECT *
                     FROM outbox_events
                     WHERE status = 'pending'
@@ -76,14 +77,14 @@ class OutboxRepository {
                     FOR UPDATE SKIP LOCKED
                 `);
 
-            if (events.length === 0) {
-                await connection.commit();
-                return [];
-            }
-            const ids = events.map(event => event.id);
-            const placeholders = ids.map(() => "?").join(", ");
-            const [result] = await connection.execute(
-                `
+      if (events.length === 0) {
+        await connection.commit();
+        return [];
+      }
+      const ids = events.map((event) => event.id);
+      const placeholders = ids.map(() => "?").join(", ");
+      const [result] = await connection.execute(
+        `
                     UPDATE outbox_events
                     SET
                         status = 'processing',
@@ -91,67 +92,69 @@ class OutboxRepository {
                         processing_started_at = NOW()
                     WHERE id IN (${placeholders})
                 `,
-                ids
-            );
-            if (result.affectedRows !== ids.length) {
-                const error = new Error(
-                    `Failed to claim all outbox events: expected ${ids.length}, updated ${result.affectedRows}`
-                );
-                error.code = OUTBOX_ERROR_CODES.CLAIM_COUNT_MISMATCH;
-                error.expectedCount = ids.length;
-                error.affectedRows = result.affectedRows;
+        ids,
+      );
+      if (result.affectedRows !== ids.length) {
+        const error = new Error(
+          `Failed to claim all outbox events: expected ${ids.length}, updated ${result.affectedRows}`,
+        );
+        error.code = OUTBOX_ERROR_CODES.CLAIM_COUNT_MISMATCH;
+        error.expectedCount = ids.length;
+        error.affectedRows = result.affectedRows;
 
-                throw error;
-            }
+        throw error;
+      }
 
-            const [claimedEvents] = await connection.execute(
-                `
+      const [claimedEvents] = await connection.execute(
+        `
                     SELECT *
                     FROM outbox_events
                     WHERE id IN (${placeholders})
                     ORDER BY created_at ASC
                 `,
-                ids
-            );
+        ids,
+      );
 
-            await connection.commit();
+      await connection.commit();
 
-            return claimedEvents;
-        } catch (error) {
-            await connection.rollback();
-            throw error;
-        } finally {
-            connection.release();
-        }
+      return claimedEvents;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
     }
+  }
 
-    async markCompleted(eventId) {
-        return this.updateProcessingEvent(
-            eventId,
-            `UPDATE outbox_events
+  async markCompleted(eventId) {
+    return this.updateProcessingEvent(
+      eventId,
+      `UPDATE outbox_events
              SET status = 'completed',
                  processed_at = NOW(),
                  processing_started_at = NULL,
                  last_error = NULL
              WHERE event_id = ?
                AND status = 'processing'`,
-        );
+    );
+  }
+
+  async markRetry(eventId, { nextRetryAt, lastError }) {
+    if (
+      !(nextRetryAt instanceof Date && !Number.isNaN(nextRetryAt.getTime())) &&
+      !(typeof nextRetryAt === "string" && nextRetryAt.trim())
+    ) {
+      throw new TypeError(
+        "nextRetryAt must be a valid Date or non-empty string",
+      );
+    }
+    if (typeof lastError !== "string" || !lastError.trim()) {
+      throw new TypeError("lastError must be a non-empty string");
     }
 
-    async markRetry(eventId, { nextRetryAt, lastError }) {
-        if (
-            !(nextRetryAt instanceof Date && !Number.isNaN(nextRetryAt.getTime())) &&
-            !(typeof nextRetryAt === "string" && nextRetryAt.trim())
-        ) {
-            throw new TypeError("nextRetryAt must be a valid Date or non-empty string");
-        }
-        if (typeof lastError !== "string" || !lastError.trim()) {
-            throw new TypeError("lastError must be a non-empty string");
-        }
-
-        return this.updateProcessingEvent(
-            eventId,
-            `UPDATE outbox_events
+    return this.updateProcessingEvent(
+      eventId,
+      `UPDATE outbox_events
              SET status = 'pending',
                  next_retry_at = ?,
                  last_error = ?,
@@ -159,33 +162,36 @@ class OutboxRepository {
                  processed_at = NULL
              WHERE event_id = ?
                AND status = 'processing'`,
-            [nextRetryAt, lastError],
-        );
+      [nextRetryAt, lastError],
+    );
+  }
+
+  async markFailed(eventId, { lastError }) {
+    if (typeof lastError !== "string" || !lastError.trim()) {
+      throw new TypeError("lastError must be a non-empty string");
     }
 
-    async markFailed(eventId, { lastError }) {
-        if (typeof lastError !== "string" || !lastError.trim()) {
-            throw new TypeError("lastError must be a non-empty string");
-        }
-
-        return this.updateProcessingEvent(
-            eventId,
-            `UPDATE outbox_events
+    return this.updateProcessingEvent(
+      eventId,
+      `UPDATE outbox_events
              SET status = 'failed',
                  last_error = ?,
                  processing_started_at = NULL
              WHERE event_id = ?
                AND status = 'processing'`,
-            [lastError],
-        );
+      [lastError],
+    );
+  }
+
+  async recoverStaleProcessing(timeout) {
+    if (!Number.isSafeInteger(timeout) || timeout < 1) {
+      throw new RangeError(
+        "timeout must be a positive safe integer in seconds",
+      );
     }
 
-    async recoverStaleProcessing(timeout) {
-        if (!Number.isSafeInteger(timeout) || timeout < 1) {
-            throw new RangeError("timeout must be a positive safe integer in seconds");
-        }
-
-        await this.pool.execute(`
+    await this.pool.execute(
+      `
             UPDATE outbox_events
             SET
                 status = 'pending',
@@ -194,9 +200,11 @@ class OutboxRepository {
                 last_error = ?
             WHERE status = 'processing'
               AND processing_started_at < DATE_SUB(NOW(), INTERVAL ? SECOND)
-        `, [OUTBOX_PROCESSING_TIMEOUT_ERROR, timeout]);
-        return true;
-    }
+        `,
+      [OUTBOX_PROCESSING_TIMEOUT_ERROR, timeout],
+    );
+    return true;
+  }
 }
 
 module.exports = OutboxRepository;

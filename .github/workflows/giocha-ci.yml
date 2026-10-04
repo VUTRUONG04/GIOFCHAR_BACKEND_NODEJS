@@ -12,6 +12,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Set up private brand package access
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.BRAND_TOKENS_DEPLOY_KEY }}
       - name: Install dependencies
         run: npm ci
       - name: Automated Test 
