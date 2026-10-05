@@ -139,14 +139,9 @@ class OutboxRepository {
     );
   }
 
-  async markRetry(eventId, { nextRetryAt, lastError }) {
-    if (
-      !(nextRetryAt instanceof Date && !Number.isNaN(nextRetryAt.getTime())) &&
-      !(typeof nextRetryAt === "string" && nextRetryAt.trim())
-    ) {
-      throw new TypeError(
-        "nextRetryAt must be a valid Date or non-empty string",
-      );
+  async markRetry(eventId, { delaySeconds, lastError }) {
+    if (!Number.isSafeInteger(delaySeconds) || delaySeconds < 1) {
+      throw new RangeError("delaySeconds must be a positive safe integer");
     }
     if (typeof lastError !== "string" || !lastError.trim()) {
       throw new TypeError("lastError must be a non-empty string");
@@ -156,13 +151,13 @@ class OutboxRepository {
       eventId,
       `UPDATE outbox_events
              SET status = 'pending',
-                 next_retry_at = ?,
+                 next_retry_at = DATE_ADD(NOW(), INTERVAL ? SECOND),
                  last_error = ?,
                  processing_started_at = NULL,
                  processed_at = NULL
              WHERE event_id = ?
                AND status = 'processing'`,
-      [nextRetryAt, lastError],
+      [delaySeconds, lastError],
     );
   }
 

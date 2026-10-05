@@ -172,7 +172,7 @@ Test MySQL thật cho outbox repository dọn các bản ghi fixture của chín
 npx vitest run test/integration/outbox.repository.test.js
 ```
 
-Email `order.created` được dựng bởi `src/services/email/buildEmail.js`; worker dùng builder trước khi gọi email provider. Màu và nhận diện thương hiệu lấy từ package private `@giocha/brand-tokens`.
+Email `order.created` được dựng bởi `src/services/email/buildEmail.js`; worker dùng builder trước khi gọi email provider. Màu và nhận diện thương hiệu lấy từ package private `@giocha/brand-tokens`. Email worker đánh dấu event đã gửi thành công, chuyển lỗi retryable về `pending` hoặc đánh dấu lỗi không retry được là `failed`. Retry dùng tối đa 5 lần gửi, exponential backoff 30, 60, 120 và 240 giây (giới hạn delay 15 phút); repository tính `next_retry_at` bằng `NOW()` cộng delay trong MySQL.
 
 Để `npm ci` chạy được trên máy local, tài khoản Git cần quyền SSH đọc repository `VUTRUONG04/giocha-brand-tokens`. GitHub Actions cần secret `BRAND_TOKENS_DEPLOY_KEY`, chứa private key của deploy key chỉ có quyền đọc package repository. Tạo deploy key trong repository brand tokens, thêm public key dưới dạng read-only deploy key, rồi lưu private key trong Actions secrets của repository backend. Các môi trường build/deploy khác cũng cần quyền đọc repository này.
 

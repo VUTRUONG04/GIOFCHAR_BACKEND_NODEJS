@@ -1,5 +1,4 @@
-const OUTBOX_PROCESSING_TIMEOUT_ERROR =
-  "Processing timeout; job requeued";
+const OUTBOX_PROCESSING_TIMEOUT_ERROR = "Processing timeout; job requeued";
 
 const OUTBOX_ERROR_CODES = Object.freeze({
   EVENT_NOT_PROCESSING: "OUTBOX_EVENT_NOT_PROCESSING",
@@ -10,8 +9,15 @@ const OUTBOX_EVENT_TYPES = Object.freeze({
   ORDER_CREATED: "order.created",
 });
 
+const MAX_ATTEMPT_RETRY = 5;
+const BASE_RETRY_DELAY_SECONDS = 30;
+const MAX_RETRY_DELAY_SECONDS = 15 * 60;
+
 module.exports = {
   OUTBOX_ERROR_CODES,
   OUTBOX_EVENT_TYPES,
   OUTBOX_PROCESSING_TIMEOUT_ERROR,
+  MAX_ATTEMPT_RETRY,
+  BASE_RETRY_DELAY_SECONDS,
+  MAX_RETRY_DELAY_SECONDS,
 };

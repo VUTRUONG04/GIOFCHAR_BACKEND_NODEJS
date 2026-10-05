@@ -1,30 +1,62 @@
 import { describe, expect, it, vi } from "vitest";
 
+import outboxConstants from "../../src/constants/outbox.cjs";
+import EmailProviderError from "../../src/errors/EmailProviderError.js";
 import EmailWorker from "../../src/workers/email.worker.js";
 
-describe("EmailWorker.execute", () => {
-  it("builds and sends the email for a processing event", async () => {
-    const provider = {
-      send: vi.fn().mockResolvedValue({ providerMessageId: "message-123" }),
-    };
-    const worker = new EmailWorker(provider);
+const { MAX_ATTEMPT_RETRY, MAX_RETRY_DELAY_SECONDS } = outboxConstants;
 
-    await expect(
-      worker.execute({
-        event_id: "event-123",
-        event_type: "order.created",
-        payload: {
-          email: "customer@example.com",
-          orderCode: "DH-123",
-          customerName: "Lan",
-          phone: "0900000000",
-          address: "123 Nguyễn Trãi",
-          totalPriceOrder: 125000,
-          paymentMethod: "COD",
-        },
-        status: "processing",
-      }),
-    ).resolves.toEqual({ providerMessageId: "message-123" });
+const createEvent = (overrides = {}) => ({
+  event_id: "event-123",
+  event_type: "order.created",
+  payload: {
+    email: "customer@example.com",
+    orderCode: "DH-123",
+    customerName: "Lan",
+    phone: "0900000000",
+    address: "123 Nguyễn Trãi",
+    totalPriceOrder: 125000,
+    paymentMethod: "COD",
+  },
+  status: "processing",
+  attempt_count: 1,
+  ...overrides,
+});
+
+const createWorker = ({ providerError } = {}) => {
+  const provider = {
+    send: providerError
+      ? vi.fn().mockRejectedValue(providerError)
+      : vi.fn().mockResolvedValue({ providerMessageId: "message-123" }),
+  };
+  const repository = {
+    markCompleted: vi.fn().mockResolvedValue(true),
+    markRetry: vi.fn().mockResolvedValue(true),
+    markFailed: vi.fn().mockResolvedValue(true),
+  };
+
+  return {
+    provider,
+    repository,
+    worker: new EmailWorker(provider, repository),
+  };
+};
+
+describe("EmailWorker", () => {
+  it("calculates exponential retry delays and caps them", () => {
+    const { worker } = createWorker();
+
+    expect([1, 2, 3, 4, 5].map((attempt) => worker.exponentialBackoff(attempt)))
+      .toEqual([30, 60, 120, 240, 480]);
+    expect(worker.exponentialBackoff(10)).toBe(MAX_RETRY_DELAY_SECONDS);
+    expect(() => worker.exponentialBackoff(0)).toThrow(RangeError);
+    expect(() => worker.exponentialBackoff(1.5)).toThrow(RangeError);
+  });
+
+  it("sends the built email and marks its event completed", async () => {
+    const { provider, repository, worker } = createWorker();
+
+    await expect(worker.execute(createEvent())).resolves.toBe(true);
 
     expect(provider.send).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -34,49 +66,105 @@ describe("EmailWorker.execute", () => {
       }),
     );
     const emailHtml = provider.send.mock.calls[0][0].html;
-    expect(emailHtml).toContain("DH-123");
     expect(emailHtml).toContain("0900000000");
     expect(emailHtml).toContain("123 Nguyễn Trãi");
+    expect(repository.markCompleted).toHaveBeenCalledWith("event-123");
+    expect(repository.markRetry).not.toHaveBeenCalled();
+    expect(repository.markFailed).not.toHaveBeenCalled();
   });
 
-  it("does not send events that are not processing", async () => {
-    const provider = { send: vi.fn() };
-    const worker = new EmailWorker(provider);
+  it("skips an event that is not processing", async () => {
+    const { provider, repository, worker } = createWorker();
 
     await expect(
-      worker.execute({
-        event_id: "event-123",
-        event_type: "order.created",
-        payload: {},
-        status: "pending",
-      }),
+      worker.execute(createEvent({ status: "pending" })),
     ).resolves.toBe(false);
 
     expect(provider.send).not.toHaveBeenCalled();
+    expect(repository.markCompleted).not.toHaveBeenCalled();
   });
 
-  it("propagates provider failures to the outbox caller", async () => {
-    const providerError = new Error("Provider unavailable");
-    const provider = {
-      send: vi.fn().mockRejectedValue(providerError),
-    };
-    const worker = new EmailWorker(provider);
+  it("schedules a retryable failure using exponential backoff", async () => {
+    const providerError = new EmailProviderError("Temporary provider error", {
+      retryable: true,
+    });
+    const { provider, repository, worker } = createWorker({ providerError });
+
+    await expect(worker.execute(createEvent({ attempt_count: 2 }))).resolves.toBe(
+      false,
+    );
+
+    expect(provider.send).toHaveBeenCalledOnce();
+    expect(repository.markRetry).toHaveBeenCalledWith("event-123", {
+      delaySeconds: 60,
+      lastError: "Temporary provider error",
+    });
+    expect(repository.markFailed).not.toHaveBeenCalled();
+    expect(repository.markCompleted).not.toHaveBeenCalled();
+  });
+
+  it("marks a retryable failure as failed after the maximum attempt", async () => {
+    const providerError = new EmailProviderError("Still unavailable", {
+      retryable: true,
+    });
+    const { repository, worker } = createWorker({ providerError });
 
     await expect(
-      worker.execute({
-        event_id: "event-123",
-        event_type: "order.created",
-        payload: {
-          email: "customer@example.com",
-          orderCode: "DH-123",
-          customerName: "Lan",
-          phone: "0900000000",
-          address: "123 Nguyễn Trãi",
-          totalPriceOrder: 125000,
-          paymentMethod: "COD",
-        },
-        status: "processing",
+      worker.execute(createEvent({ attempt_count: MAX_ATTEMPT_RETRY })),
+    ).resolves.toBe(false);
+
+    expect(repository.markFailed).toHaveBeenCalledWith("event-123", {
+      lastError: "Still unavailable",
+    });
+    expect(repository.markRetry).not.toHaveBeenCalled();
+  });
+
+  it("marks non-retryable delivery errors as failed", async () => {
+    const providerError = new EmailProviderError("Invalid recipient");
+    const { repository, worker } = createWorker({ providerError });
+
+    await expect(worker.execute(createEvent())).resolves.toBe(false);
+
+    expect(repository.markFailed).toHaveBeenCalledWith("event-123", {
+      lastError: "Invalid recipient",
+    });
+    expect(repository.markRetry).not.toHaveBeenCalled();
+  });
+
+  it("marks email construction errors as failed", async () => {
+    const { provider, repository, worker } = createWorker();
+
+    await expect(
+      worker.execute(
+        createEvent({ event_type: "unsupported.event" }),
+      ),
+    ).resolves.toBe(false);
+
+    expect(provider.send).not.toHaveBeenCalled();
+    expect(repository.markFailed).toHaveBeenCalledWith(
+      "event-123",
+      expect.objectContaining({
+        lastError: "Unsupported email event type: unsupported.event",
       }),
-    ).rejects.toBe(providerError);
+    );
+  });
+
+  it("propagates repository failures when recording delivery failures", async () => {
+    const providerError = new EmailProviderError("Temporary provider error", {
+      retryable: true,
+    });
+    const stateError = new Error("Database unavailable");
+    const { repository, worker } = createWorker({ providerError });
+    repository.markRetry.mockRejectedValue(stateError);
+
+    await expect(worker.execute(createEvent())).rejects.toBe(stateError);
+  });
+
+  it("propagates failure to mark a successfully sent event completed", async () => {
+    const stateError = new Error("Database unavailable");
+    const { repository, worker } = createWorker();
+    repository.markCompleted.mockRejectedValue(stateError);
+
+    await expect(worker.execute(createEvent())).rejects.toBe(stateError);
   });
 });

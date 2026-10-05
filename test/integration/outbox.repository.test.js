@@ -168,18 +168,18 @@ describe("OutboxRepository (MySQL integration)", () => {
     expect(events[0].processed_at).not.toBeNull();
   });
 
-  it("returns an event to pending with retry details", async () => {
+  it("returns an event to pending with retry time based on NOW()", async () => {
     const eventId = await insertTestEvent({ status: "processing" });
-    const nextRetryAt = "2030-05-06 07:08:09";
+    const delaySeconds = 120;
     const lastError = "Temporary email provider failure";
 
     await expect(
-      repository.markRetry(eventId, { nextRetryAt, lastError }),
+      repository.markRetry(eventId, { delaySeconds, lastError }),
     ).resolves.toBe(true);
 
     const [events] = await testPool.execute(
       `SELECT status,
-              DATE_FORMAT(next_retry_at, '%Y-%m-%d %H:%i:%s') AS next_retry_at,
+              TIMESTAMPDIFF(SECOND, NOW(), next_retry_at) AS retry_delay_seconds,
               processing_started_at,
               processed_at,
               last_error
@@ -189,11 +189,14 @@ describe("OutboxRepository (MySQL integration)", () => {
     );
     expect(events[0]).toMatchObject({
       status: "pending",
-      next_retry_at: nextRetryAt,
       processing_started_at: null,
       processed_at: null,
       last_error: lastError,
     });
+    expect(events[0].retry_delay_seconds).toBeGreaterThanOrEqual(
+      delaySeconds - 1,
+    );
+    expect(events[0].retry_delay_seconds).toBeLessThanOrEqual(delaySeconds);
   });
 
   it("marks a processing event as failed with the last error", async () => {
@@ -231,13 +234,13 @@ describe("OutboxRepository (MySQL integration)", () => {
 
     await expect(
       repository.markRetry(eventId, {
-        nextRetryAt: new Date(Number.NaN),
+        delaySeconds: 0,
         lastError: "Temporary failure",
       }),
-    ).rejects.toThrow("nextRetryAt must be a valid Date or non-empty string");
+    ).rejects.toThrow("delaySeconds must be a positive safe integer");
     await expect(
       repository.markRetry(eventId, {
-        nextRetryAt: "2030-05-06 07:08:09",
+        delaySeconds: 30,
         lastError: " ",
       }),
     ).rejects.toThrow("lastError must be a non-empty string");
