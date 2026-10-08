@@ -1,7 +1,7 @@
 import pool from "../config/db.js";
 import {
   BASE_RETRY_DELAY_SECONDS,
-  MAX_ATTEMPT_RETRY,
+  MAX_ATTEMPTS,
   MAX_RETRY_DELAY_SECONDS,
 } from "../constants/outbox.cjs";
 import { LOG_ACTIONS, LOG_STATUSES } from "../constants/logEvents.js";
@@ -66,7 +66,7 @@ class EmailWorker {
         if (
           error instanceof EmailProviderError &&
           error.retryable &&
-          attempt_count < MAX_ATTEMPT_RETRY
+          attempt_count < MAX_ATTEMPTS
         ) {
           const delaySeconds = this.exponentialBackoff(attempt_count);
           await this.repository.markRetry(event_id, {
@@ -121,6 +121,27 @@ class EmailWorker {
       providerMessageId,
     });
     return true;
+  }
+
+  async pollRecovery() {
+    try {
+      const recoveryCount = await this.repository.recoverStaleProcessing();
+      if (recoveryCount > 0) {
+        logger.info(LOG_ACTIONS.EMAIL.RECOVERY, {
+          status: LOG_STATUSES.RECOVERED,
+          recoveredCount: recoveryCount,
+        });
+      }
+      return recoveryCount;
+    } catch (error) {
+      logger.error(LOG_ACTIONS.EMAIL.RECOVERY, {
+        status: LOG_STATUSES.FAILED,
+        operation: "poll_recovery",
+        reason: error?.code || error?.name || "RECOVERY_FAILED",
+        error: error instanceof Error ? error.message : "Unknown recovery error",
+      });
+      throw error;
+    }
   }
 }
 

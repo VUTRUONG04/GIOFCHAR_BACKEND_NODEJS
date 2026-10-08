@@ -17,10 +17,9 @@ const testPool = mysql.createPool({
 const repository = new OutboxRepository(testPool);
 
 async function cleanTestEvents() {
-  await testPool.execute(
-    "DELETE FROM outbox_events WHERE aggregate_type = ?",
-    [testAggregateType],
-  );
+  await testPool.execute("DELETE FROM outbox_events WHERE aggregate_type = ?", [
+    testAggregateType,
+  ]);
 }
 
 async function insertTestEvent({ status = "pending", retryAt } = {}) {
@@ -203,9 +202,9 @@ describe("OutboxRepository (MySQL integration)", () => {
     const eventId = await insertTestEvent({ status: "processing" });
     const lastError = "Permanent email provider failure";
 
-    await expect(
-      repository.markFailed(eventId, { lastError }),
-    ).resolves.toBe(true);
+    await expect(repository.markFailed(eventId, { lastError })).resolves.toBe(
+      true,
+    );
 
     const [events] = await testPool.execute(
       `SELECT status, processing_started_at, last_error
@@ -334,7 +333,7 @@ describe("OutboxRepository (MySQL integration)", () => {
       [activeEventId],
     );
 
-    await expect(repository.recoverStaleProcessing(60)).resolves.toBe(true);
+    await expect(repository.recoverStaleProcessing(60)).resolves.toBeGreaterThan(0);
 
     const [events] = await testPool.execute(
       `SELECT event_id,

@@ -1,6 +1,7 @@
 const {
   OUTBOX_ERROR_CODES,
   OUTBOX_PROCESSING_TIMEOUT_ERROR,
+  RECOVERY_STALE_AFTER_SECONDS,
 } = require("../constants/outbox.cjs");
 const { randomUUID } = require("node:crypto");
 
@@ -178,14 +179,14 @@ class OutboxRepository {
     );
   }
 
-  async recoverStaleProcessing(timeout) {
+  async recoverStaleProcessing(timeout = RECOVERY_STALE_AFTER_SECONDS) {
     if (!Number.isSafeInteger(timeout) || timeout < 1) {
       throw new RangeError(
         "timeout must be a positive safe integer in seconds",
       );
     }
 
-    await this.pool.execute(
+    const [result] = await this.pool.execute(
       `
             UPDATE outbox_events
             SET
@@ -198,7 +199,7 @@ class OutboxRepository {
         `,
       [OUTBOX_PROCESSING_TIMEOUT_ERROR, timeout],
     );
-    return true;
+    return result.affectedRows;
   }
 }
 

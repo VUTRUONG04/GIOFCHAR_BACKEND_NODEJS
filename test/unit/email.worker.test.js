@@ -1,10 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import outboxConstants from "../../src/constants/outbox.cjs";
+import { LOG_ACTIONS, LOG_STATUSES } from "../../src/constants/logEvents.js";
+import logger from "../../src/config/logger.js";
 import EmailProviderError from "../../src/errors/EmailProviderError.js";
 import EmailWorker from "../../src/workers/email.worker.js";
 
-const { MAX_ATTEMPT_RETRY, MAX_RETRY_DELAY_SECONDS } = outboxConstants;
+const { MAX_ATTEMPTS, MAX_RETRY_DELAY_SECONDS } = outboxConstants;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const createEvent = (overrides = {}) => ({
   event_id: "event-123",
@@ -33,6 +39,7 @@ const createWorker = ({ providerError } = {}) => {
     markCompleted: vi.fn().mockResolvedValue(true),
     markRetry: vi.fn().mockResolvedValue(true),
     markFailed: vi.fn().mockResolvedValue(true),
+    recoverStaleProcessing: vi.fn().mockResolvedValue(0),
   };
 
   return {
@@ -46,8 +53,9 @@ describe("EmailWorker", () => {
   it("calculates exponential retry delays and caps them", () => {
     const { worker } = createWorker();
 
-    expect([1, 2, 3, 4, 5].map((attempt) => worker.exponentialBackoff(attempt)))
-      .toEqual([30, 60, 120, 240, 480]);
+    expect(
+      [1, 2, 3, 4, 5].map((attempt) => worker.exponentialBackoff(attempt)),
+    ).toEqual([30, 60, 120, 240, 480]);
     expect(worker.exponentialBackoff(10)).toBe(MAX_RETRY_DELAY_SECONDS);
     expect(() => worker.exponentialBackoff(0)).toThrow(RangeError);
     expect(() => worker.exponentialBackoff(1.5)).toThrow(RangeError);
@@ -90,9 +98,9 @@ describe("EmailWorker", () => {
     });
     const { provider, repository, worker } = createWorker({ providerError });
 
-    await expect(worker.execute(createEvent({ attempt_count: 2 }))).resolves.toBe(
-      false,
-    );
+    await expect(
+      worker.execute(createEvent({ attempt_count: 2 })),
+    ).resolves.toBe(false);
 
     expect(provider.send).toHaveBeenCalledOnce();
     expect(repository.markRetry).toHaveBeenCalledWith("event-123", {
@@ -110,7 +118,7 @@ describe("EmailWorker", () => {
     const { repository, worker } = createWorker({ providerError });
 
     await expect(
-      worker.execute(createEvent({ attempt_count: MAX_ATTEMPT_RETRY })),
+      worker.execute(createEvent({ attempt_count: MAX_ATTEMPTS })),
     ).resolves.toBe(false);
 
     expect(repository.markFailed).toHaveBeenCalledWith("event-123", {
@@ -135,9 +143,7 @@ describe("EmailWorker", () => {
     const { provider, repository, worker } = createWorker();
 
     await expect(
-      worker.execute(
-        createEvent({ event_type: "unsupported.event" }),
-      ),
+      worker.execute(createEvent({ event_type: "unsupported.event" })),
     ).resolves.toBe(false);
 
     expect(provider.send).not.toHaveBeenCalled();
@@ -166,5 +172,50 @@ describe("EmailWorker", () => {
     repository.markCompleted.mockRejectedValue(stateError);
 
     await expect(worker.execute(createEvent())).rejects.toBe(stateError);
+  });
+
+  it("logs how many stale events were recovered", async () => {
+    const { repository, worker } = createWorker();
+    repository.recoverStaleProcessing.mockResolvedValue(3);
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => logger);
+
+    await expect(worker.pollRecovery()).resolves.toBe(3);
+
+    expect(repository.recoverStaleProcessing).toHaveBeenCalledOnce();
+    expect(infoSpy).toHaveBeenCalledWith(LOG_ACTIONS.EMAIL.RECOVERY, {
+      status: LOG_STATUSES.RECOVERED,
+      recoveredCount: 3,
+    });
+  });
+
+  it("does not log routine polls when no stale events were recovered", async () => {
+    const { repository, worker } = createWorker();
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => logger);
+
+    await expect(worker.pollRecovery()).resolves.toBe(0);
+
+    expect(repository.recoverStaleProcessing).toHaveBeenCalledOnce();
+    expect(infoSpy).not.toHaveBeenCalledWith(
+      LOG_ACTIONS.EMAIL.RECOVERY,
+      expect.anything(),
+    );
+  });
+
+  it("logs and propagates errors from recovery polling", async () => {
+    const recoveryError = Object.assign(new Error("Database unavailable"), {
+      code: "DB_UNAVAILABLE",
+    });
+    const { repository, worker } = createWorker();
+    repository.recoverStaleProcessing.mockRejectedValue(recoveryError);
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => logger);
+
+    await expect(worker.pollRecovery()).rejects.toBe(recoveryError);
+
+    expect(errorSpy).toHaveBeenCalledWith(LOG_ACTIONS.EMAIL.RECOVERY, {
+      status: LOG_STATUSES.FAILED,
+      operation: "poll_recovery",
+      reason: "DB_UNAVAILABLE",
+      error: "Database unavailable",
+    });
   });
 });

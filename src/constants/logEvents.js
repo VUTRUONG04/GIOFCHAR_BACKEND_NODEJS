@@ -59,6 +59,7 @@ export const LOG_ACTIONS = {
   },
   EMAIL: {
     WORKER: "email_worker",
+    RECOVERY: "email_recovery",
   },
   TRANSACTION: "transaction",
 };
@@ -74,6 +75,7 @@ export const LOG_STATUSES = {
   ALLOWED: "allowed",
   DENIED: "denied",
   RETRYING: "retrying",
+  RECOVERED: "recovered",
   PREPARED: "prepared",
   SKIPPED: "skipped",
   ABORTED: "aborted",
