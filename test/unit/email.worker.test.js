@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import outboxConstants from "../../src/constants/outbox.cjs";
+import { POLL_INTERVAL_MS } from "../../src/constants/email.js";
 import { LOG_ACTIONS, LOG_STATUSES } from "../../src/constants/logEvents.js";
 import logger from "../../src/config/logger.js";
 import EmailProviderError from "../../src/errors/EmailProviderError.js";
@@ -9,6 +10,7 @@ import EmailWorker from "../../src/workers/email.worker.js";
 const { MAX_ATTEMPTS, MAX_RETRY_DELAY_SECONDS } = outboxConstants;
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -40,6 +42,7 @@ const createWorker = ({ providerError } = {}) => {
     markRetry: vi.fn().mockResolvedValue(true),
     markFailed: vi.fn().mockResolvedValue(true),
     recoverStaleProcessing: vi.fn().mockResolvedValue(0),
+    claimPendingBatch: vi.fn().mockResolvedValue([]),
   };
 
   return {
@@ -47,6 +50,17 @@ const createWorker = ({ providerError } = {}) => {
     repository,
     worker: new EmailWorker(provider, repository),
   };
+};
+
+const createDeferred = () => {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+
+  return { promise, resolve, reject };
 };
 
 describe("EmailWorker", () => {
@@ -217,5 +231,186 @@ describe("EmailWorker", () => {
       reason: "DB_UNAVAILABLE",
       error: "Database unavailable",
     });
+  });
+
+  it("returns zero counts when there are no pending events", async () => {
+    const { repository, worker } = createWorker();
+    const debugSpy = vi.spyOn(logger, "debug").mockImplementation(() => logger);
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => logger);
+
+    await expect(worker.pollPending()).resolves.toEqual({
+      claimedCount: 0,
+      completedCount: 0,
+      deferredCount: 0,
+      errorCount: 0,
+    });
+
+    expect(repository.claimPendingBatch).toHaveBeenCalledOnce();
+    expect(debugSpy).toHaveBeenCalledWith(LOG_ACTIONS.EMAIL.POLL, {
+      claimedCount: 0,
+    });
+    expect(infoSpy).not.toHaveBeenCalledWith(
+      LOG_ACTIONS.EMAIL.POLL,
+      expect.anything(),
+    );
+  });
+
+  it("processes all claimed events and reports accurate outcomes", async () => {
+    const { repository, worker } = createWorker();
+    const events = [
+      createEvent({ event_id: "event-completed" }),
+      createEvent({ event_id: "event-error" }),
+      createEvent({ event_id: "event-deferred" }),
+    ];
+    repository.claimPendingBatch.mockResolvedValue(events);
+    const executeSpy = vi
+      .spyOn(worker, "execute")
+      .mockResolvedValueOnce(true)
+      .mockRejectedValueOnce(new Error("Outbox update failed"))
+      .mockResolvedValueOnce(false);
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => logger);
+
+    await expect(worker.pollPending()).resolves.toEqual({
+      claimedCount: 3,
+      completedCount: 1,
+      deferredCount: 1,
+      errorCount: 1,
+    });
+
+    expect(executeSpy.mock.calls.map(([event]) => event.event_id)).toEqual([
+      "event-completed",
+      "event-error",
+      "event-deferred",
+    ]);
+    expect(infoSpy).toHaveBeenCalledWith(LOG_ACTIONS.EMAIL.POLL, {
+      status: LOG_STATUSES.COMPLETED,
+      claimedCount: 3,
+      completedCount: 1,
+      deferredCount: 1,
+      errorCount: 1,
+    });
+  });
+
+  it("propagates errors when claiming the pending batch fails", async () => {
+    const claimError = new Error("Database unavailable");
+    const { repository, worker } = createWorker();
+    repository.claimPendingBatch.mockRejectedValue(claimError);
+    const executeSpy = vi.spyOn(worker, "execute");
+
+    await expect(worker.pollPending()).rejects.toBe(claimError);
+
+    expect(executeSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns the active run promise and avoids starting a second loop", async () => {
+    const { worker } = createWorker();
+    const pollStarted = createDeferred();
+    const finishPoll = createDeferred();
+    const pollPendingSpy = vi
+      .spyOn(worker, "pollPending")
+      .mockImplementationOnce(async () => {
+        pollStarted.resolve();
+        await finishPoll.promise;
+      });
+
+    const firstRun = worker.start();
+    await pollStarted.promise;
+    const secondRun = worker.start();
+
+    expect(secondRun).toBe(firstRun);
+    expect(pollPendingSpy).toHaveBeenCalledOnce();
+
+    const stopping = worker.stop();
+    finishPoll.resolve();
+    await expect(stopping).resolves.toBeUndefined();
+    await expect(firstRun).resolves.toBeUndefined();
+    expect(worker.running).toBe(false);
+    expect(worker.runPromise).toBeNull();
+  });
+
+  it("waits for an in-flight poll to finish before stop resolves", async () => {
+    const { worker } = createWorker();
+    const pollStarted = createDeferred();
+    const finishPoll = createDeferred();
+    vi.spyOn(worker, "pollPending").mockImplementationOnce(async () => {
+      pollStarted.resolve();
+      await finishPoll.promise;
+    });
+
+    worker.start();
+    await pollStarted.promise;
+
+    let stopped = false;
+    const stopping = worker.stop().then(() => {
+      stopped = true;
+    });
+
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+
+    finishPoll.resolve();
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+
+  it("waits between polling iterations", async () => {
+    vi.useFakeTimers();
+    const { worker } = createWorker();
+    const pollPendingSpy = vi
+      .spyOn(worker, "pollPending")
+      .mockResolvedValue({
+        claimedCount: 0,
+        completedCount: 0,
+        deferredCount: 0,
+        errorCount: 0,
+      });
+
+    const runPromise = worker.start();
+    expect(pollPendingSpy).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS - 1);
+    expect(pollPendingSpy).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(pollPendingSpy).toHaveBeenCalledTimes(2);
+
+    const stopping = worker.stop();
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    await expect(stopping).resolves.toBeUndefined();
+    await expect(runPromise).resolves.toBeUndefined();
+  });
+
+  it("returns loop failures to the caller and resets its lifecycle state", async () => {
+    const runError = new Error("Pending event poll failed");
+    const { worker } = createWorker();
+    vi.spyOn(worker, "pollPending").mockRejectedValueOnce(runError);
+
+    const runPromise = worker.start();
+    await expect(runPromise).rejects.toBe(runError);
+
+    expect(worker.running).toBe(false);
+    expect(worker.runPromise).toBeNull();
+    await expect(worker.stop()).resolves.toBeUndefined();
+  });
+
+  it("propagates a loop failure through stop while it waits", async () => {
+    const runError = new Error("Pending event poll failed");
+    const { worker } = createWorker();
+    const pollStarted = createDeferred();
+    const failPoll = createDeferred();
+    vi.spyOn(worker, "pollPending").mockImplementationOnce(async () => {
+      pollStarted.resolve();
+      await failPoll.promise;
+    });
+
+    const runPromise = worker.start();
+    await pollStarted.promise;
+    const stopping = worker.stop();
+    failPoll.reject(runError);
+
+    await expect(stopping).rejects.toBe(runError);
+    await expect(runPromise).rejects.toBe(runError);
+    expect(worker.running).toBe(false);
+    expect(worker.runPromise).toBeNull();
   });
 });

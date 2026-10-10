@@ -7,6 +7,8 @@ validateEnv();
 import app from "./app.js";
 import pool, { checkDBConnection } from "./config/db.js";
 import logger from "./config/logger.js";
+import ResendProvider from "./services/email/ResendProvider.js";
+import EmailWorker from "./workers/email.worker.js";
 import {
   LOG_ACTIONS,
   LOG_STATUSES,
@@ -15,6 +17,7 @@ import {
 const port = process.env.PORT || 8081;
 
 let server;
+let emailWorker;
 let isShuttingDown = false;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
@@ -52,26 +55,111 @@ async function shutdown({ reason, exitCode }) {
 
   forceShutdownTimer.unref();
 
-  try {
-    await closeHttpServer();
-    await pool.end();
+  let shutdownFailed = false;
 
-    logger.info(LOG_ACTIONS.SYSTEM.APPLICATION_SHUTDOWN, {
-      status: LOG_STATUSES.COMPLETED,
-      reason,
-      exitCode,
-    });
-  } catch (error) {
-    logger.error(LOG_ACTIONS.SYSTEM.APPLICATION_SHUTDOWN, {
-      status: LOG_STATUSES.FAILED,
-      reason: error.code || "SHUTDOWN_FAILED",
-      message: error.message,
-    });
-    exitCode = 1;
+  try {
+    try {
+      await closeHttpServer();
+    } catch (error) {
+      logger.error(LOG_ACTIONS.SYSTEM.APPLICATION_SHUTDOWN, {
+        status: LOG_STATUSES.FAILED,
+        reason: error.code || "SHUTDOWN_FAILED",
+        operation: "close_http_server",
+        message: error.message,
+      });
+      shutdownFailed = true;
+    }
+
+    try {
+      if (emailWorker) {
+        await emailWorker.stop();
+        logger.info(LOG_ACTIONS.EMAIL.WORKER, {
+          status: LOG_STATUSES.COMPLETED,
+          operation: "stop",
+        });
+      }
+    } catch (error) {
+      logger.error(LOG_ACTIONS.EMAIL.WORKER, {
+        status: LOG_STATUSES.FAILED,
+        operation: "stop",
+        reason: error.code || error.name || "WORKER_STOP_FAILED",
+        message: error.message,
+      });
+      shutdownFailed = true;
+    }
+
+    try {
+      await pool.end();
+    } catch (error) {
+      logger.error(LOG_ACTIONS.SYSTEM.APPLICATION_SHUTDOWN, {
+        status: LOG_STATUSES.FAILED,
+        reason: error.code || "SHUTDOWN_FAILED",
+        operation: "close_database_pool",
+        message: error.message,
+      });
+      shutdownFailed = true;
+    }
+
+    if (!shutdownFailed) {
+      logger.info(LOG_ACTIONS.SYSTEM.APPLICATION_SHUTDOWN, {
+        status: LOG_STATUSES.COMPLETED,
+        reason,
+        exitCode,
+      });
+    } else {
+      exitCode = 1;
+    }
   } finally {
     clearTimeout(forceShutdownTimer);
     process.exitCode = exitCode;
   }
+}
+
+function createEmailWorker() {
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  const from = process.env.EMAIL_FROM?.trim();
+
+  if (!apiKey && !from) {
+    logger.info(LOG_ACTIONS.EMAIL.WORKER, {
+      status: LOG_STATUSES.SKIPPED,
+      reason: "EMAIL_PROVIDER_NOT_CONFIGURED",
+    });
+    return null;
+  }
+
+  return new EmailWorker(new ResendProvider({ apiKey, from }));
+}
+
+function handleEmailWorkerError(error) {
+  logger.error(LOG_ACTIONS.EMAIL.WORKER, {
+    status: LOG_STATUSES.FAILED,
+    operation: "run",
+    reason: error.code || error.name || "WORKER_RUN_FAILED",
+    message: error.message,
+    stack: error.stack,
+  });
+
+  void shutdown({
+    reason: "email_worker_failed",
+    exitCode: 1,
+  });
+}
+
+function startEmailWorker() {
+  logger.info(LOG_ACTIONS.EMAIL.WORKER, {
+    status: LOG_STATUSES.STARTED,
+    operation: "start",
+  });
+
+  let runPromise;
+  try {
+    runPromise = emailWorker.start();
+  } catch (error) {
+    handleEmailWorkerError(error);
+    return;
+  }
+
+  runPromise.catch(handleEmailWorkerError);
 }
 
 function normalizeError(reason) {
@@ -116,28 +204,44 @@ function handleStartupError(error) {
 }
 
 async function startApplication() {
+  let phase = "database_connection";
   try {
     await checkDBConnection();
 
+    phase = "email_worker_configuration";
+    emailWorker = createEmailWorker();
+
+    phase = "http_listen";
     server = app.listen(port, () => {
       logger.info(LOG_ACTIONS.SYSTEM.APPLICATION_STARTUP, {
         status: LOG_STATUSES.SUCCEEDED,
         port,
         environment: process.env.NODE_ENV,
       });
+      if (emailWorker) startEmailWorker();
     });
     server.on("error", handleStartupError);
   } catch (error) {
     logger.error(LOG_ACTIONS.SYSTEM.APPLICATION_STARTUP, {
       status: LOG_STATUSES.FAILED,
-      phase: "database_connection",
-      databaseType: "mysql",
-      reason: error.code || "CONNECTION_FAILED",
+      phase,
+      ...(phase === "database_connection" ? { databaseType: "mysql" } : {}),
+      reason: error.code || "STARTUP_FAILED",
       message: error.message,
     });
 
-    await pool.end();
-    process.exitCode = 1;
+    try {
+      await pool.end();
+    } catch (closeError) {
+      logger.error(LOG_ACTIONS.SYSTEM.APPLICATION_SHUTDOWN, {
+        status: LOG_STATUSES.FAILED,
+        operation: "close_database_pool",
+        reason: closeError.code || "SHUTDOWN_FAILED",
+        message: closeError.message,
+      });
+    } finally {
+      process.exitCode = 1;
+    }
   }
 }
 

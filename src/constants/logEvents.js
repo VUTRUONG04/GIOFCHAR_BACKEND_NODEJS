@@ -60,6 +60,7 @@ export const LOG_ACTIONS = {
   EMAIL: {
     WORKER: "email_worker",
     RECOVERY: "email_recovery",
+    POLL: "email_poll",
   },
   TRANSACTION: "transaction",
 };

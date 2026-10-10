@@ -9,12 +9,18 @@ import EmailProviderError from "../errors/EmailProviderError.js";
 import OutboxRepository from "../repositories/outbox.repository.js";
 import logger from "../config/logger.js";
 import buildEmail from "../services/email/buildEmail.js";
+import { POLL_INTERVAL_MS, RECOVERY_INTERVAL_MS } from "../constants/email.js";
 
 const outboxRepository = new OutboxRepository(pool);
+const sleep = (durationMs) =>
+  new Promise((resolve) => setTimeout(resolve, durationMs));
+
 class EmailWorker {
   constructor(provider, repository = outboxRepository) {
     this.provider = provider;
     this.repository = repository;
+    this.running = false;
+    this.runPromise = null;
   }
 
   exponentialBackoff(attemptCount) {
@@ -41,6 +47,7 @@ class EmailWorker {
 
     let providerMessageId;
 
+    // Gui mail
     try {
       const { subject, html } = buildEmail(event_type, payload);
       ({ providerMessageId } = await this.provider.send({
@@ -100,6 +107,7 @@ class EmailWorker {
       }
     }
 
+    // THanh cong thi danh giau thanh cong
     try {
       await this.repository.markCompleted(event_id);
     } catch (error) {
@@ -138,10 +146,113 @@ class EmailWorker {
         status: LOG_STATUSES.FAILED,
         operation: "poll_recovery",
         reason: error?.code || error?.name || "RECOVERY_FAILED",
-        error: error instanceof Error ? error.message : "Unknown recovery error",
+        error:
+          error instanceof Error ? error.message : "Unknown recovery error",
       });
       throw error;
     }
+  }
+
+  async pollPending() {
+    let events;
+    try {
+      events = await this.repository.claimPendingBatch();
+      logger.debug(LOG_ACTIONS.EMAIL.POLL, {
+        claimedCount: events.length,
+      });
+      if (!events.length) {
+        return {
+          claimedCount: 0,
+          completedCount: 0,
+          deferredCount: 0,
+          errorCount: 0,
+        };
+      }
+    } catch (error) {
+      logger.warn(LOG_ACTIONS.EMAIL.POLL, {
+        status: LOG_STATUSES.FAILED,
+        operation: "claim_pending_batch",
+        reason: error?.name || error?.code || "DB_FAILED",
+      });
+      throw error;
+    }
+
+    let completedCount = 0;
+    let deferredCount = 0;
+    let errorCount = 0;
+
+    for (const event of events) {
+      try {
+        const completed = await this.execute(event);
+        if (completed) {
+          completedCount++;
+        } else {
+          deferredCount++;
+        }
+      } catch {
+        errorCount++;
+      }
+    }
+
+    logger.info(LOG_ACTIONS.EMAIL.POLL, {
+      status: LOG_STATUSES.COMPLETED,
+      claimedCount: events.length,
+      completedCount,
+      deferredCount,
+      errorCount,
+    });
+
+    return {
+      claimedCount: events.length,
+      completedCount,
+      deferredCount,
+      errorCount,
+    };
+  }
+
+  async run() {
+    let lastRecoveryAt = Date.now();
+    while (this.running) {
+      if (lastRecoveryAt + RECOVERY_INTERVAL_MS <= Date.now()) {
+        await this.pollRecovery();
+        lastRecoveryAt = Date.now();
+      }
+
+      if (!this.running) break;
+      await this.pollPending();
+
+      if (!this.running) break;
+      await sleep(POLL_INTERVAL_MS);
+    }
+  }
+
+  async stop() {
+    this.running = false;
+    if (this.runPromise) {
+      await this.runPromise;
+    }
+  }
+
+  start() {
+    if (this.runPromise !== null) {
+      return this.runPromise;
+    }
+    if (this.running) {
+      throw new Error("Email worker is running without a tracked run promise");
+    }
+
+    this.running = true;
+
+    let runPromise;
+    runPromise = this.run().finally(() => {
+      if (this.runPromise === runPromise) {
+        this.running = false;
+        this.runPromise = null;
+      }
+    });
+
+    this.runPromise = runPromise;
+    return runPromise;
   }
 }
 
