@@ -5,6 +5,9 @@ import app from "../../src/app.js";
 import orderService from "../../src/services/order.service.js";
 import paymentService from "../../src/services/payment.service.js";
 import { signVnpayParams } from "../../src/services/payments/vnpay.service.js";
+import outboxConstants from "../../src/constants/outbox.cjs";
+
+const { OUTBOX_EVENT_TYPES } = outboxConstants;
 
 // Mock cấu hình VNPay cố định để chữ ký đồng nhất
 vi.mock("../../src/config/vnpay.js", () => ({
@@ -34,6 +37,7 @@ vi.mock("../../src/services/payment.service.js", () => ({
 // Mock Connection Pool cho DB Transaction
 const mockConnection = {
   beginTransaction: vi.fn(),
+  execute: vi.fn(),
   commit: vi.fn(),
   rollback: vi.fn(),
   release: vi.fn(),
@@ -56,6 +60,8 @@ describe("GET /api/payments/vnpay/ipn (VNPay Webhook Integration)", () => {
     orderId: MOCK_ORDER_ID,
     orderCode: MOCK_ORDER_CODE,
     amount: MOCK_AMOUNT,
+    customerName: "Nguyen Van A",
+    email: "a@example.com",
   };
 
   const MOCK_PAYMENT_DB = {
@@ -68,6 +74,7 @@ describe("GET /api/payments/vnpay/ipn (VNPay Webhook Integration)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockConnection.execute.mockResolvedValue([{}]);
   });
 
   afterEach(() => {
@@ -184,6 +191,19 @@ describe("GET /api/payments/vnpay/ipn (VNPay Webhook Integration)", () => {
         transactionId: "14123456",
       },
       mockConnection,
+    );
+    const [outboxInsertQuery, outboxValues] = mockConnection.execute.mock.calls
+      .find(([query]) => query.includes("INSERT INTO outbox_events"));
+    expect(outboxInsertQuery).toContain("INSERT INTO outbox_events");
+    expect(outboxValues[1]).toBe(OUTBOX_EVENT_TYPES.PAYMENT_SUCCEEDED);
+    expect(outboxValues[4]).toEqual(
+      JSON.stringify({
+        email: MOCK_ORDER_DB.email,
+        orderCode: MOCK_ORDER_DB.orderCode,
+        customerName: MOCK_ORDER_DB.customerName,
+        amount: MOCK_PAYMENT_DB.amount,
+        transactionId: "14123456",
+      }),
     );
     expect(mockConnection.commit).toHaveBeenCalled();
     expect(mockConnection.release).toHaveBeenCalled();

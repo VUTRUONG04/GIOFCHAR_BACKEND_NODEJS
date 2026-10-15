@@ -66,6 +66,7 @@ describe("OutboxRepository (MySQL integration)", () => {
       status: "processing",
       attempt_count: 1,
     });
+    expect(claimedEvents[0].last_attempt_at).not.toBeNull();
 
     const [remainingEvents] = await testPool.execute(
       `SELECT event_id, status, attempt_count
@@ -389,4 +390,97 @@ describe("OutboxRepository (MySQL integration)", () => {
       );
     },
   );
+
+  it("lists and returns admin event details including the latest attempt", async () => {
+    const eventId = await insertTestEvent({ status: "failed" });
+    await testPool.execute(
+      `UPDATE outbox_events
+       SET attempt_count = 3,
+           last_attempt_at = DATE_SUB(NOW(), INTERVAL 1 MINUTE),
+           last_error = 'Provider unavailable'
+       WHERE event_id = ?`,
+      [eventId],
+    );
+    const [[{ id }]] = await testPool.execute(
+      "SELECT id FROM outbox_events WHERE event_id = ?",
+      [eventId],
+    );
+
+    const listed = await repository.listAdminEvents({
+      status: "failed",
+      limit: 10,
+      offset: 0,
+    });
+    const details = await repository.getAdminEventById(id);
+
+    expect(listed.total).toBeGreaterThan(0);
+    expect(listed.events).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id, status: "failed" })]),
+    );
+    expect(details).toMatchObject({
+      id,
+      attemptCount: 3,
+      lastError: "Provider unavailable",
+      status: "failed",
+    });
+    expect(details.lastAttemptAt).not.toBeNull();
+  });
+
+  it("manually retries a failed event, resetting attempts and making it due now", async () => {
+    const eventId = await insertTestEvent({ status: "failed" });
+    await testPool.execute(
+      `UPDATE outbox_events
+       SET attempt_count = 5,
+           last_error = 'Provider unavailable',
+           next_retry_at = DATE_ADD(NOW(), INTERVAL 1 DAY)
+       WHERE event_id = ?`,
+      [eventId],
+    );
+
+    const [[{ id }]] = await testPool.execute(
+      "SELECT id FROM outbox_events WHERE event_id = ?",
+      [eventId],
+    );
+    await expect(repository.retryFailedEvent(id)).resolves.toBe(true);
+
+    const [events] = await testPool.execute(
+      `SELECT status,
+              attempt_count,
+              last_error,
+              processing_started_at,
+              processed_at,
+              next_retry_at <= NOW() AS retry_is_due
+       FROM outbox_events
+       WHERE id = ?`,
+      [id],
+    );
+    expect(events[0]).toMatchObject({
+      status: "pending",
+      attempt_count: 0,
+      last_error: null,
+      processing_started_at: null,
+      processed_at: null,
+      retry_is_due: 1,
+    });
+  });
+
+  it("does not manually retry an event marked as recovered from a processing timeout", async () => {
+    const eventId = await insertTestEvent({ status: "failed" });
+    await testPool.execute(
+      "UPDATE outbox_events SET last_error = ? WHERE event_id = ?",
+      [OUTBOX_PROCESSING_TIMEOUT_ERROR, eventId],
+    );
+    const [[{ id }]] = await testPool.execute(
+      "SELECT id FROM outbox_events WHERE event_id = ?",
+      [eventId],
+    );
+
+    await expect(repository.retryFailedEvent(id)).resolves.toBe(false);
+
+    const [events] = await testPool.execute(
+      "SELECT status FROM outbox_events WHERE id = ?",
+      [id],
+    );
+    expect(events[0].status).toBe("failed");
+  });
 });

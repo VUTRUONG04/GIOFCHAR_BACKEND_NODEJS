@@ -90,6 +90,7 @@ class OutboxRepository {
                     SET
                         status = 'processing',
                         attempt_count = attempt_count + 1,
+                        last_attempt_at = NOW(),
                         processing_started_at = NOW()
                     WHERE id IN (${placeholders})
                 `,
@@ -200,6 +201,92 @@ class OutboxRepository {
       [OUTBOX_PROCESSING_TIMEOUT_ERROR, timeout],
     );
     return result.affectedRows;
+  }
+
+  async listAdminEvents({ status, limit, offset }) {
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new RangeError("limit must be a positive safe integer");
+    }
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new RangeError("offset must be a non-negative safe integer");
+    }
+
+    const filters = status ? "WHERE status = ?" : "";
+    const values = status ? [status] : [];
+    const [[{ total }]] = await this.pool.execute(
+      `SELECT COUNT(*) AS total FROM outbox_events ${filters}`,
+      values,
+    );
+    const [rows] = await this.pool.execute(
+      `
+        SELECT
+          id,
+          event_id AS eventId,
+          event_type AS eventType,
+          aggregate_type AS aggregateType,
+          aggregate_id AS aggregateId,
+          status,
+          attempt_count AS attemptCount,
+          next_retry_at AS nextRetryAt,
+          last_attempt_at AS lastAttemptAt,
+          last_error AS lastError,
+          processed_at AS processedAt,
+          created_at AS createdAt
+        FROM outbox_events
+        ${filters}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `,
+      values,
+    );
+
+    return { events: rows, total: Number(total) };
+  }
+
+  async getAdminEventById(id) {
+    const [rows] = await this.pool.execute(
+      `
+        SELECT
+          id,
+          event_id AS eventId,
+          event_type AS eventType,
+          aggregate_type AS aggregateType,
+          aggregate_id AS aggregateId,
+          payload,
+          status,
+          attempt_count AS attemptCount,
+          next_retry_at AS nextRetryAt,
+          last_attempt_at AS lastAttemptAt,
+          last_error AS lastError,
+          processing_started_at AS processingStartedAt,
+          processed_at AS processedAt,
+          created_at AS createdAt
+        FROM outbox_events
+        WHERE id = ?
+      `,
+      [id],
+    );
+    return rows[0] || null;
+  }
+
+  async retryFailedEvent(id) {
+    const [result] = await this.pool.execute(
+      `
+        UPDATE outbox_events
+        SET
+          status = 'pending',
+          attempt_count = 0,
+          next_retry_at = NOW(),
+          processing_started_at = NULL,
+          processed_at = NULL,
+          last_error = NULL
+        WHERE id = ?
+          AND status = 'failed'
+          AND (last_error IS NULL OR last_error <> ?)
+      `,
+      [id, OUTBOX_PROCESSING_TIMEOUT_ERROR],
+    );
+    return result.affectedRows === 1;
   }
 }
 
