@@ -2,15 +2,21 @@ import crypto from "crypto";
 import qs from "qs";
 import dayjs from "dayjs";
 
+import pool from "../../config/db.js";
 import { vnpayConfig } from "../../config/vnpay.js";
 import { sortObject } from "../../utils/payment.js";
+import OutboxRepository from "../../repositories/outbox.repository.js";
 import orderService from "../order.service.js";
 import paymentService from "../payment.service.js";
 import logger from "../../config/logger.js";
+import outboxConstants from "../../constants/outbox.cjs";
 import {
   LOG_ACTIONS,
   LOG_STATUSES,
 } from "../../constants/logEvents.js";
+
+const outboxRepository = new OutboxRepository(pool);
+const { OUTBOX_EVENT_TYPES } = outboxConstants;
 
 export function buildVnpayPaymentUrl({
   orderId,
@@ -97,6 +103,24 @@ export async function processIpn({ order, payment, vnp_Params, connection }) {
     },
     connection,
   );
+
+  if (newPaymentStatus === "success") {
+    await outboxRepository.createPendingEvent(
+      {
+        eventType: OUTBOX_EVENT_TYPES.PAYMENT_SUCCEEDED,
+        aggregateType: "order",
+        aggregateId: Number(order.orderId),
+        payload: {
+          email: order.email,
+          orderCode: order.orderCode,
+          customerName: order.customerName,
+          amount: payment.amount,
+          transactionId,
+        },
+      },
+      connection,
+    );
+  }
 
   return {
     RspCode: "00",

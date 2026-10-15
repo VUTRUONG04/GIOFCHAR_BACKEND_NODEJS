@@ -9,10 +9,7 @@ import pool, { checkDBConnection } from "./config/db.js";
 import logger from "./config/logger.js";
 import ResendProvider from "./services/email/ResendProvider.js";
 import EmailWorker from "./workers/email.worker.js";
-import {
-  LOG_ACTIONS,
-  LOG_STATUSES,
-} from "./constants/logEvents.js";
+import { LOG_ACTIONS, LOG_STATUSES } from "./constants/logEvents.js";
 
 const port = process.env.PORT || 8081;
 

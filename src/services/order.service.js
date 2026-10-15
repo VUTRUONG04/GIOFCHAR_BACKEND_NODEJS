@@ -399,8 +399,11 @@ const getByOrderCode = async ({ orderCode }, conn = pool) => {
   const sql = `
       SELECT
         o.id as orderId,
+        o.orderCode,
         o.status,
         o.paymentStatus,
+        o.customerName,
+        o.email,
         o.has_viewed_payment_result,
         SUM(oi.totalPrice) as amount
       FROM orders o 

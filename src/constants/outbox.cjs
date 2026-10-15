@@ -8,6 +8,7 @@ const OUTBOX_ERROR_CODES = Object.freeze({
 const OUTBOX_EVENT_TYPES = Object.freeze({
   ORDER_CREATED: "order.created",
   ORDER_STATUS_UPDATED: "order.status_updated",
+  PAYMENT_SUCCEEDED: "payment.succeeded",
 });
 
 const MAX_ATTEMPTS = 5;

@@ -42,6 +42,22 @@ describe("buildEmail", () => {
     expect(email.html).toContain(brandTokens.name);
   });
 
+  it("builds a payment succeeded email", () => {
+    const email = buildEmail(OUTBOX_EVENT_TYPES.PAYMENT_SUCCEEDED, {
+      orderCode: "DH-123",
+      customerName: "Lan",
+      amount: 125000,
+      transactionId: "VNPAY-456",
+    });
+
+    expect(email.subject).toContain("Thanh toán thành công");
+    expect(email.subject).toContain("DH-123");
+    expect(email.html).toContain("Lan");
+    expect(email.html).toContain("125.000");
+    expect(email.html).toContain("VNPAY-456");
+    expect(email.html).toContain(brandTokens.name);
+  });
+
   it("escapes user-controlled values in the HTML", () => {
     const email = buildEmail("order.created", {
       orderCode: "<script>alert(1)</script>",
@@ -77,6 +93,12 @@ describe("buildEmail", () => {
         status: "unknown",
       }),
     ).toThrow(TypeError);
+    expect(() =>
+      buildEmail(OUTBOX_EVENT_TYPES.PAYMENT_SUCCEEDED, {
+        orderCode: "DH-123",
+        amount: "invalid",
+      }),
+    ).toThrow(TypeError);
   });
 
   it("escapes user-controlled values in order status update emails", () => {
@@ -90,5 +112,20 @@ describe("buildEmail", () => {
     expect(email.html).not.toContain("<img");
     expect(email.html).toContain("&lt;script&gt;bad&lt;/script&gt;");
     expect(email.html).toContain("&lt;img src=x&gt;");
+  });
+
+  it("escapes user-controlled values in payment succeeded emails", () => {
+    const email = buildEmail(OUTBOX_EVENT_TYPES.PAYMENT_SUCCEEDED, {
+      orderCode: "<script>bad</script>",
+      customerName: "<img src=x>",
+      amount: 50000,
+      transactionId: "<script>transaction</script>",
+    });
+
+    expect(email.html).not.toContain("<script>");
+    expect(email.html).not.toContain("<img");
+    expect(email.html).toContain("&lt;script&gt;bad&lt;/script&gt;");
+    expect(email.html).toContain("&lt;img src=x&gt;");
+    expect(email.html).toContain("&lt;script&gt;transaction&lt;/script&gt;");
   });
 });

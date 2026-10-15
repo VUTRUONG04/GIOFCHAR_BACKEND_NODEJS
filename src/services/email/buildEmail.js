@@ -180,9 +180,83 @@ const buildOrderStatusUpdatedEmail = (payload) => {
   };
 };
 
+const buildPaymentSucceededEmail = (payload) => {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new TypeError("payment.succeeded email payload must be an object");
+  }
+
+  const { orderCode, customerName, amount, transactionId } = payload;
+  if (typeof orderCode !== "string" || !orderCode.trim()) {
+    throw new TypeError("payment.succeeded email payload requires orderCode");
+  }
+
+  const numericAmount = Number(amount);
+  if (
+    (typeof amount !== "number" && typeof amount !== "string") ||
+    (typeof amount === "string" && !amount.trim()) ||
+    !Number.isFinite(numericAmount) ||
+    numericAmount < 0
+  ) {
+    throw new TypeError(
+      "payment.succeeded email payload requires a non-negative amount",
+    );
+  }
+
+  const safeBrandName = escapeHtml(brandTokens.name);
+  const safeCustomerName = escapeHtml(customerName || "Quý khách");
+  const safeOrderCode = escapeHtml(orderCode.trim());
+  const formattedAmount = escapeHtml(formatVnd(numericAmount));
+  const safeTransactionId = transactionId
+    ? escapeHtml(transactionId)
+    : "";
+
+  return {
+    subject: `Thanh toán thành công đơn hàng ${orderCode.trim()} - ${brandTokens.name}`,
+    html: `<!doctype html>
+      <html lang="vi">
+        <body style="margin:0;padding:24px;background-color:${brandTokens.colors.background};font-family:${brandTokens.fonts.body};color:${brandTokens.colors.text};">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;margin:0 auto;background-color:${brandTokens.colors.surface};border-radius:12px;overflow:hidden;">
+            <tr>
+              <td style="padding:24px;background-color:${brandTokens.colors.primary};color:${brandTokens.colors.surface};">
+                <div style="font-size:22px;font-weight:700;">${safeBrandName}</div>
+                <div style="margin-top:4px;font-size:14px;">${escapeHtml(brandTokens.tagline)}</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px 24px;">
+                <h1 style="margin:0 0 16px;font-size:22px;color:${brandTokens.colors.text};">Thanh toán thành công</h1>
+                <p style="margin:0 0 24px;line-height:1.6;color:${brandTokens.colors.secondary};">Xin chào ${safeCustomerName}, chúng tôi đã nhận được thanh toán cho đơn hàng của bạn.</p>
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:${brandTokens.colors.backgroundSoft};border-radius:8px;">
+                  <tr>
+                    <td style="padding:16px;color:${brandTokens.colors.secondary};">Mã đơn hàng</td>
+                    <td style="padding:16px;text-align:right;font-weight:700;color:${brandTokens.colors.primaryDark};">${safeOrderCode}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:0 16px 16px;color:${brandTokens.colors.secondary};">Số tiền</td>
+                    <td style="padding:0 16px 16px;text-align:right;font-weight:700;color:${brandTokens.colors.primaryDark};">${formattedAmount}</td>
+                  </tr>
+                  ${
+                    safeTransactionId
+                      ? `<tr>
+                    <td style="padding:0 16px 16px;color:${brandTokens.colors.secondary};">Mã giao dịch</td>
+                    <td style="padding:0 16px 16px;text-align:right;color:${brandTokens.colors.text};">${safeTransactionId}</td>
+                  </tr>`
+                      : ""
+                  }
+                </table>
+                <p style="margin:24px 0 0;line-height:1.6;color:${brandTokens.colors.secondary};">Trân trọng,<br/><strong style="color:${brandTokens.colors.primaryDark};">${safeBrandName}</strong></p>
+              </td>
+            </tr>
+          </table>
+        </body>
+      </html>`,
+  };
+};
+
 const emailBuilders = {
   [OUTBOX_EVENT_TYPES.ORDER_CREATED]: buildOrderCreatedEmail,
   [OUTBOX_EVENT_TYPES.ORDER_STATUS_UPDATED]: buildOrderStatusUpdatedEmail,
+  [OUTBOX_EVENT_TYPES.PAYMENT_SUCCEEDED]: buildPaymentSucceededEmail,
 };
 
 const buildEmail = (eventType, payload) => {
