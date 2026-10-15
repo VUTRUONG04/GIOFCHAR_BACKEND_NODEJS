@@ -184,8 +184,8 @@ Sau khi chạy seed thành công, bạn có thể sử dụng các tài khoản 
 
 | Quyền hạn | Email                | Password | Ghi chú                                                 |
 | --------- | -------------------- | -------- | ------------------------------------------------------- |
-| **Admin** | `admin@giofchar.com` | `123456` | Quyền quản trị tối cao (Tạo món, đổi trạng thái đơn...) |
-| **User**  | `user@giofchar.com`  | `123456` | Tài khoản khách hàng cơ bản                             |
+| **Admin** | `123admin@gmail.com` | `123456` | Quyền quản trị tối cao (Tạo món, đổi trạng thái đơn...) |
+| **User**  | `user@gmail.com`     | `123456` | Tài khoản khách hàng cơ bản                             |
 
 ---
 
