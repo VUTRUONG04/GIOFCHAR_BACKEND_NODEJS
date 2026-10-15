@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import brandTokens from "@giocha/brand-tokens";
+import outboxConstants from "../../src/constants/outbox.cjs";
 import buildEmail from "../../src/services/email/buildEmail.js";
+
+const { OUTBOX_EVENT_TYPES } = outboxConstants;
 
 describe("buildEmail", () => {
   it("builds a branded order-created email with inline styles", () => {
@@ -23,6 +26,20 @@ describe("buildEmail", () => {
     expect(email.html).toContain("0900000000");
     expect(email.html).toContain("123 Nguyễn Trãi, Quận 1");
     expect(email.html).toContain("Thanh toán khi nhận hàng");
+  });
+
+  it("builds an order status update email", () => {
+    const email = buildEmail(OUTBOX_EVENT_TYPES.ORDER_STATUS_UPDATED, {
+      orderCode: "DH-123",
+      customerName: "Lan",
+      status: "delivering",
+    });
+
+    expect(email.subject).toContain("DH-123");
+    expect(email.subject).toContain("đang được giao");
+    expect(email.html).toContain("Lan");
+    expect(email.html).toContain("Đơn hàng đang được giao");
+    expect(email.html).toContain(brandTokens.name);
   });
 
   it("escapes user-controlled values in the HTML", () => {
@@ -54,5 +71,24 @@ describe("buildEmail", () => {
         totalPriceOrder: null,
       }),
     ).toThrow(TypeError);
+    expect(() =>
+      buildEmail(OUTBOX_EVENT_TYPES.ORDER_STATUS_UPDATED, {
+        orderCode: "DH-123",
+        status: "unknown",
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it("escapes user-controlled values in order status update emails", () => {
+    const email = buildEmail(OUTBOX_EVENT_TYPES.ORDER_STATUS_UPDATED, {
+      orderCode: "<script>bad</script>",
+      customerName: "<img src=x>",
+      status: "cancelled",
+    });
+
+    expect(email.html).not.toContain("<script>");
+    expect(email.html).not.toContain("<img");
+    expect(email.html).toContain("&lt;script&gt;bad&lt;/script&gt;");
+    expect(email.html).toContain("&lt;img src=x&gt;");
   });
 });

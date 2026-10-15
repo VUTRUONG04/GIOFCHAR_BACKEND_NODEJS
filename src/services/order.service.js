@@ -176,27 +176,46 @@ const updateOrder = async (orderId, status) => {
 
   try {
     await connection.beginTransaction();
+    const [orderRows] = await connection.execute(
+      `SELECT id AS orderId, orderCode, customerName, email, status
+       FROM orders
+       WHERE id = ?
+       FOR UPDATE`,
+      [orderId],
+    );
+    const order = orderRows[0];
+    if (!order) throw new NotFoundError("Order not found");
 
     if (status !== "delivered") {
       await updateOrderStatus(orderId, status, connection);
-      await connection.commit();
-      logger.debug(LOG_ACTIONS.TRANSACTION, {
-        status: LOG_STATUSES.COMMITTED,
-        operation: "update_order",
-        orderId,
-        orderStatus: status,
-        durationMs: Date.now() - transactionStartedAt,
-      });
-      return true;
+    } else {
+      // Khi giao COD, xác nhận giao hàng đồng thời xác nhận đã thu tiền.
+      // Với CARD, trạng thái thanh toán được cập nhật riêng từ callback VNPay.
+      const payment = await paymentService.getByOrderId(orderId, connection);
+      if (!payment) throw new NotFoundError("Payment not found");
+
+      if (payment.paymentType === "COD") {
+        await confirmCodOrderPayment(orderId, status, connection);
+      } else {
+        await updateOrderStatus(orderId, status, connection);
+      }
     }
 
-    const payment = await paymentService.getByOrderId(orderId, connection);
-    if (!payment) throw new NotFoundError("Payment not found");
-
-    if (payment.paymentType === "COD") {
-      await confirmCodOrderPayment(orderId, status, connection);
-    } else {
-      await updateOrderStatus(orderId, status, connection);
+    if (order.status !== status) {
+      await outboxRepository.createPendingEvent(
+        {
+          eventType: OUTBOX_EVENT_TYPES.ORDER_STATUS_UPDATED,
+          aggregateType: "order",
+          aggregateId: Number(order.orderId),
+          payload: {
+            email: order.email,
+            orderCode: order.orderCode,
+            customerName: order.customerName,
+            status,
+          },
+        },
+        connection,
+      );
     }
 
     await connection.commit();

@@ -233,6 +233,7 @@ class EmailWorker {
     }
   }
 
+  // Dùng runPromise biếng cục bộ để theo dõi lẫn khởi chạy của run() và giải phóng đúng this.runPromise không giải phóng nhầm.
   start() {
     if (this.runPromise !== null) {
       return this.runPromise;
