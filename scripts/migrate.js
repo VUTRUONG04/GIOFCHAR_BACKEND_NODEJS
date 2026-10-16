@@ -1,13 +1,31 @@
 import dotenv from "dotenv";
-dotenv.config();
 
 import fs from "fs";
 import path from "path";
-import fileURLToPath from "url";
+import { fileURLToPath } from "url";
 import mysql from "mysql2/promise";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const isTestMigration = process.argv.includes("--test");
+const envPath = path.join(
+  __dirname,
+  "..",
+  isTestMigration ? ".env.test" : ".env",
+);
+const envResult = dotenv.config({ path: envPath });
+
+if (isTestMigration && envResult.error && envResult.error.code !== "ENOENT") {
+  // ENOENT file không tồn tại
+  console.error("Failed to load test environment:", envResult.error.message);
+  process.exit(1);
+}
+if (isTestMigration && !process.env.DB_NAME?.toLowerCase().endsWith("_test")) {
+  console.error(
+    "Refusing to migrate: DB_NAME in .env.test must end with '_test'.",
+  );
+  process.exit(1);
+}
 
 async function runMigrations() {
   console.log("🚀 Starting database migrations...");
@@ -21,8 +39,16 @@ async function runMigrations() {
   // 1. Connect to MySQL server (without specifying DB first to ensure DB exists)
   let connection;
   try {
-    connection = await mysql.createConnection({ host, user, password, port, multipleStatements: true });
-    await connection.query(`CREATE DATABASE IF NOT EXISTS \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`);
+    connection = await mysql.createConnection({
+      host,
+      user,
+      password,
+      port,
+      multipleStatements: true,
+    });
+    await connection.query(
+      `CREATE DATABASE IF NOT EXISTS \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`,
+    );
     await connection.changeUser({ database });
     console.log(`✅ Connected to database '${database}' on ${host}:${port}`);
   } catch (error) {
@@ -40,7 +66,9 @@ async function runMigrations() {
     `);
 
     // 3. Get applied migration versions
-    const [rows] = await connection.query("SELECT version FROM `schema_migrations`");
+    const [rows] = await connection.query(
+      "SELECT version FROM `schema_migrations`",
+    );
     const appliedVersions = new Set(rows.map((row) => row.version));
 
     // 4. Read migration files
@@ -75,7 +103,10 @@ async function runMigrations() {
         await connection.query(sqlContent);
       }
 
-      await connection.query("INSERT INTO `schema_migrations` (`version`) VALUES (?)", [file]);
+      await connection.query(
+        "INSERT INTO `schema_migrations` (`version`) VALUES (?)",
+        [file],
+      );
       console.log(`    ✅ Successfully applied '${file}'`);
       appliedCount++;
     }
@@ -83,7 +114,9 @@ async function runMigrations() {
     if (appliedCount === 0) {
       console.log("🎉 Database is up to date! No new migrations to run.");
     } else {
-      console.log(`🎉 Migrations completed successfully! (${appliedCount} file(s) executed)`);
+      console.log(
+        `🎉 Migrations completed successfully! (${appliedCount} file(s) executed)`,
+      );
     }
   } catch (error) {
     console.error("❌ Error executing migration script:", error);

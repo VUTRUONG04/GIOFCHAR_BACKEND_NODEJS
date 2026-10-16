@@ -57,6 +57,11 @@ export const LOG_ACTIONS = {
     VALIDATE_CALLBACK: "validate_payment_callback",
     PROCESS_CALLBACK: "process_payment_callback",
   },
+  EMAIL: {
+    WORKER: "email_worker",
+    RECOVERY: "email_recovery",
+    POLL: "email_poll",
+  },
   TRANSACTION: "transaction",
 };
 
@@ -71,6 +76,7 @@ export const LOG_STATUSES = {
   ALLOWED: "allowed",
   DENIED: "denied",
   RETRYING: "retrying",
+  RECOVERED: "recovered",
   PREPARED: "prepared",
   SKIPPED: "skipped",
   ABORTED: "aborted",

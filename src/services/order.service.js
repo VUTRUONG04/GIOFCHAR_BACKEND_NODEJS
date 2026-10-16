@@ -1,10 +1,9 @@
 import pool from "../config/db.js";
+import OutboxRepository from "../repositories/outbox.repository.js";
+import outboxConstants from "../constants/outbox.cjs";
 import logger from "../config/logger.js";
 import { ORDER_STATUS, PAYMENT_STATUS } from "../constants/field.js";
-import {
-  LOG_ACTIONS,
-  LOG_STATUSES,
-} from "../constants/logEvents.js";
+import { LOG_ACTIONS, LOG_STATUSES } from "../constants/logEvents.js";
 import {
   BadRequestError,
   ConflictError,
@@ -23,6 +22,9 @@ import paymentService from "./payment.service.js";
 import { buildVnpayPaymentUrl } from "./payments/vnpay.service.js";
 import { validateOwner } from "./validators.js";
 import { deductStockForOrder } from "./variant.service.js";
+
+const outboxRepository = new OutboxRepository(pool);
+const { OUTBOX_EVENT_TYPES } = outboxConstants;
 
 const getAllOrders = async () => {
   const [rows] = await pool.execute(`
@@ -174,27 +176,46 @@ const updateOrder = async (orderId, status) => {
 
   try {
     await connection.beginTransaction();
+    const [orderRows] = await connection.execute(
+      `SELECT id AS orderId, orderCode, customerName, email, status
+       FROM orders
+       WHERE id = ?
+       FOR UPDATE`,
+      [orderId],
+    );
+    const order = orderRows[0];
+    if (!order) throw new NotFoundError("Order not found");
 
     if (status !== "delivered") {
       await updateOrderStatus(orderId, status, connection);
-      await connection.commit();
-      logger.debug(LOG_ACTIONS.TRANSACTION, {
-        status: LOG_STATUSES.COMMITTED,
-        operation: "update_order",
-        orderId,
-        orderStatus: status,
-        durationMs: Date.now() - transactionStartedAt,
-      });
-      return true;
+    } else {
+      // Khi giao COD, xác nhận giao hàng đồng thời xác nhận đã thu tiền.
+      // Với CARD, trạng thái thanh toán được cập nhật riêng từ callback VNPay.
+      const payment = await paymentService.getByOrderId(orderId, connection);
+      if (!payment) throw new NotFoundError("Payment not found");
+
+      if (payment.paymentType === "COD") {
+        await confirmCodOrderPayment(orderId, status, connection);
+      } else {
+        await updateOrderStatus(orderId, status, connection);
+      }
     }
 
-    const payment = await paymentService.getByOrderId(orderId, connection);
-    if (!payment) throw new NotFoundError("Payment not found");
-
-    if (payment.paymentType === "COD") {
-      await confirmCodOrderPayment(orderId, status, connection);
-    } else {
-      await updateOrderStatus(orderId, status, connection);
+    if (order.status !== status) {
+      await outboxRepository.createPendingEvent(
+        {
+          eventType: OUTBOX_EVENT_TYPES.ORDER_STATUS_UPDATED,
+          aggregateType: "order",
+          aggregateId: Number(order.orderId),
+          payload: {
+            email: order.email,
+            orderCode: order.orderCode,
+            customerName: order.customerName,
+            status,
+          },
+        },
+        connection,
+      );
     }
 
     await connection.commit();
@@ -226,7 +247,7 @@ const updateOrderStatus = async (orderId, status, conn = pool) => {
   if (!ORDER_STATUS.includes(status))
     throw new BadRequestError("Invalid order status");
   await assertOrderUpdatable(orderId, conn); // check order đang ở một trạng thái cuối ko thể cập nhật lại: đã giao | đã hủy
-  const [result] = await conn.execute( 
+  const [result] = await conn.execute(
     "UPDATE orders o SET status = ? WHERE id = ?",
     [status, orderId],
   );
@@ -378,8 +399,11 @@ const getByOrderCode = async ({ orderCode }, conn = pool) => {
   const sql = `
       SELECT
         o.id as orderId,
+        o.orderCode,
         o.status,
         o.paymentStatus,
+        o.customerName,
+        o.email,
         o.has_viewed_payment_result,
         SUM(oi.totalPrice) as amount
       FROM orders o 
@@ -469,6 +493,25 @@ const checkout = async (
     });
   }
   await cartService.clearCart(cartId, conn);
+  await outboxRepository.createPendingEvent(
+    {
+      eventType: OUTBOX_EVENT_TYPES.ORDER_CREATED,
+      aggregateType: "order",
+      aggregateId: orderId,
+      payload: {
+        orderId,
+        orderCode,
+        customerName,
+        email,
+        phone,
+        address,
+        totalPriceOrder,
+        paymentMethod,
+      },
+    },
+    conn,
+  );
+
   return {
     orderId,
     orderCode,

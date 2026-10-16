@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const { createPendingEvent } = vi.hoisted(() => ({
+  createPendingEvent: vi.fn(),
+}));
+
 // 1. Mock cấu hình VNPay cố định
 vi.mock("../../src/config/vnpay.js", () => ({
   vnpayConfig: {
@@ -23,6 +27,19 @@ vi.mock("../../src/services/payment.service.js", () => ({
     updatePaymentById: vi.fn(),
   },
 }));
+
+vi.mock("../../src/repositories/outbox.repository.js", () => ({
+  default: class MockOutboxRepository {
+    createPendingEvent(...args) {
+      return createPendingEvent(...args);
+    }
+  },
+}));
+
+vi.mock("../../src/config/db.js", () => ({
+  default: {},
+}));
+
 import {
   buildVnpayPaymentUrl,
   signVnpayParams,
@@ -31,10 +48,14 @@ import {
 import orderService from "../../src/services/order.service.js";
 import paymentService from "../../src/services/payment.service.js";
 import { vnpayConfig } from "../../src/config/vnpay.js";
+import outboxConstants from "../../src/constants/outbox.cjs";
+
+const { OUTBOX_EVENT_TYPES } = outboxConstants;
 
 describe("vnpay.service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    createPendingEvent.mockResolvedValue("event-id");
   });
 
   const MOCK_ORDER_ID = 99;
@@ -68,11 +89,17 @@ describe("vnpay.service", () => {
   });
 
   describe("processIpn", () => {
-    const mockOrder = { orderId: MOCK_ORDER_ID, orderCode: MOCK_ORDER_CODE };
+    const mockOrder = {
+      orderId: MOCK_ORDER_ID,
+      orderCode: MOCK_ORDER_CODE,
+      customerName: "Nguyen Van A",
+      email: "a@example.com",
+    };
     const mockPayment = {
       paymentId: 202,
       paymentStatus: "pending",
       paymentType: "CARD",
+      amount: MOCK_AMOUNT,
     };
     const mockConnection = {};
 
@@ -114,6 +141,25 @@ describe("vnpay.service", () => {
         },
         mockConnection,
       );
+
+      expect(createPendingEvent).toHaveBeenCalledWith(
+        {
+          eventType: OUTBOX_EVENT_TYPES.PAYMENT_SUCCEEDED,
+          aggregateType: "order",
+          aggregateId: MOCK_ORDER_ID,
+          payload: {
+            email: mockOrder.email,
+            orderCode: mockOrder.orderCode,
+            customerName: mockOrder.customerName,
+            amount: mockPayment.amount,
+            transactionId: "14123456",
+          },
+        },
+        mockConnection,
+      );
+      expect(
+        paymentService.updatePaymentById.mock.invocationCallOrder[0],
+      ).toBeLessThan(createPendingEvent.mock.invocationCallOrder[0]);
     });
 
     it("updates status to failed when vnp_ResponseCode is not '00'", async () => {
@@ -137,6 +183,7 @@ describe("vnpay.service", () => {
         },
         mockConnection,
       );
+      expect(createPendingEvent).not.toHaveBeenCalled();
     });
 
     it("returns RspCode '02' duplicate when payment is not in pending status", async () => {
@@ -156,6 +203,23 @@ describe("vnpay.service", () => {
       expect(result.outcome).toBe("duplicate");
       expect(orderService.updatePaymentStatus).not.toHaveBeenCalled();
       expect(paymentService.updatePaymentById).not.toHaveBeenCalled();
+      expect(createPendingEvent).not.toHaveBeenCalled();
+    });
+
+    it("propagates outbox persistence errors so the IPN transaction can roll back", async () => {
+      createPendingEvent.mockRejectedValue(new Error("Outbox insert failed"));
+
+      await expect(
+        processIpn({
+          order: mockOrder,
+          payment: mockPayment,
+          vnp_Params: {
+            vnp_ResponseCode: "00",
+            vnp_TransactionNo: "14123456",
+          },
+          connection: mockConnection,
+        }),
+      ).rejects.toThrow("Outbox insert failed");
     });
   });
 });

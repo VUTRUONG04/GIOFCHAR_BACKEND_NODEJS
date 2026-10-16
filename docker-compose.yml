@@ -1,7 +1,7 @@
 services:
   mysql:
-    image: mysql:5.7.40
-    container_name: mysql-giofchar-db
+    image: mysql:8.4
+    container_name: mysql-giofchar-db-84
     restart: always
     platform: linux/amd64
     healthcheck:
@@ -20,7 +20,7 @@ services:
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
-      - "3308:3306"
+      - "3309:3306"
     volumes:
       - mysql_data:/var/lib/mysql
       - ./initdb:/docker-entrypoint-initdb.d:ro
@@ -46,7 +46,7 @@ services:
       PORT: ${PORT}
       HOST_NAME: ${HOST_NAME}
 
-      DB_HOST: mysql-giofchar-db
+      DB_HOST: mysql
       DB_USER: ${MYSQL_USER}
       DB_PASSWORD: ${MYSQL_PASSWORD}
       DB_NAME: ${MYSQL_DATABASE}

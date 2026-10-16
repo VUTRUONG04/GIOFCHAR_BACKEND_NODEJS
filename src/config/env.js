@@ -36,6 +36,31 @@ export function validateEnv() {
     process.exit(1);
   }
 
+  const resendApiKey = process.env.RESEND_API_KEY?.trim();
+  const emailFrom = process.env.EMAIL_FROM?.trim();
+  if (Boolean(resendApiKey) !== Boolean(emailFrom)) {
+    const missingEmailConfig = [
+      ["RESEND_API_KEY", resendApiKey],
+      ["EMAIL_FROM", emailFrom],
+    ]
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    const errorMsg =
+      "RESEND_API_KEY and EMAIL_FROM must both be configured to enable the email worker.";
+
+    logger.error(LOG_ACTIONS.SYSTEM.APPLICATION_STARTUP, {
+      status: LOG_STATUSES.FAILED,
+      reason: "INCOMPLETE_EMAIL_CONFIG",
+      missingKeys: missingEmailConfig,
+      message: errorMsg,
+    });
+    console.error(
+      `\n❌ CRITICAL STARTUP ERROR:\n${errorMsg}\n👉 Configure both values in your .env file or leave both empty to disable the email worker.\n`,
+    );
+    process.exit(1);
+    return;
+  }
+
   // Check optional external service dependencies
   const missingOptional = optionalIntegrations.filter((item) => !process.env[item.name]);
   if (missingOptional.length > 0) {

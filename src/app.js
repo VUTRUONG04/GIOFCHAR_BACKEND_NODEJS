@@ -15,6 +15,7 @@ import statisticRoutes from "./routes/statistic.route.js";
 import promotionRoutes from "./routes/promotion.route.js";
 import variantRoutes from "./routes/variant.route.js";
 import guestRoutes from "./routes/guest.route.js";
+import adminRoutes from "./routes/admin.route.js";
 
 import { checkOrigin } from "./middlewares/session.middleware.js";
 import { errorHandler } from "./errors/errorHandler.js";
@@ -70,6 +71,7 @@ app.use("/api/carts", cartRoutes);
 app.use("/api/foods", foodRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/admin", adminRoutes);
 
 app.use("/", (req, res) => {
   res.send("Hello world, this is GIOFCHAR WEBSITE");
