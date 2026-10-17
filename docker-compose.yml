@@ -71,14 +71,35 @@ services:
       VNP_PAY_URL: ${VNP_PAY_URL}
       VNP_RETURN_URL: ${VNP_RETURN_URL}
       VNP_IPN_URL: ${VNP_IPN_URL}
+      REDIS_URL: redis://redis:6379
     depends_on:
       mysql:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis-giofchar
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     networks:
       - backend-net
 
 volumes:
   mysql_data:
+  redis_data:
 
 networks:
   backend-net:
