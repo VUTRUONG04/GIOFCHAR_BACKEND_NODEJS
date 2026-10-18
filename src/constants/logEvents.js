@@ -8,6 +8,8 @@ export const LOG_ACTIONS = {
     APPLICATION_STARTUP: "application_startup",
     APPLICATION_SHUTDOWN: "application_shutdown",
     PROCESS_ERROR: "process_error",
+
+    REDIS_CONNECTION: "redis_connection",
   },
   AUTH: {
     REGISTER: "register",

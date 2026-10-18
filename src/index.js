@@ -10,12 +10,14 @@ import logger from "./config/logger.js";
 import ResendProvider from "./services/email/ResendProvider.js";
 import EmailWorker from "./workers/email.worker.js";
 import { LOG_ACTIONS, LOG_STATUSES } from "./constants/logEvents.js";
+import redisClient, { connectRedis, closeRedis } from "./config/redis.js";
 
 const port = process.env.PORT || 8081;
 
 let server;
 let emailWorker;
 let isShuttingDown = false;
+let isApplicationReady = false;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 function closeHttpServer() {
@@ -34,6 +36,7 @@ function closeHttpServer() {
 async function shutdown({ reason, exitCode }) {
   if (isShuttingDown) return;
   isShuttingDown = true;
+  isApplicationReady = false;
 
   logger.info(LOG_ACTIONS.SYSTEM.APPLICATION_SHUTDOWN, {
     status: LOG_STATUSES.STARTED,
@@ -80,6 +83,18 @@ async function shutdown({ reason, exitCode }) {
         status: LOG_STATUSES.FAILED,
         operation: "stop",
         reason: error.code || error.name || "WORKER_STOP_FAILED",
+        message: error.message,
+      });
+      shutdownFailed = true;
+    }
+
+    try {
+      await closeRedis();
+    } catch (error) {
+      logger.error(LOG_ACTIONS.SYSTEM.APPLICATION_SHUTDOWN, {
+        status: LOG_STATUSES.FAILED,
+        reason: error.code || "SHUTDOWN_FAILED",
+        operation: "close_redis",
         message: error.message,
       });
       shutdownFailed = true;
@@ -186,6 +201,11 @@ function handleFatalError(type, reason) {
   });
 }
 
+redisClient.on("error", (error) => {
+  if (!isApplicationReady || isShuttingDown) return;
+  handleFatalError("redis_error", error);
+});
+
 function handleStartupError(error) {
   logger.error(LOG_ACTIONS.SYSTEM.APPLICATION_STARTUP, {
     status: LOG_STATUSES.FAILED,
@@ -205,11 +225,15 @@ async function startApplication() {
   try {
     await checkDBConnection();
 
+    phase = "redis_connection";
+    await connectRedis();
+
     phase = "email_worker_configuration";
     emailWorker = createEmailWorker();
 
     phase = "http_listen";
     server = app.listen(port, () => {
+      isApplicationReady = true;
       logger.info(LOG_ACTIONS.SYSTEM.APPLICATION_STARTUP, {
         status: LOG_STATUSES.SUCCEEDED,
         port,
@@ -226,6 +250,17 @@ async function startApplication() {
       reason: error.code || "STARTUP_FAILED",
       message: error.message,
     });
+
+    try {
+      await closeRedis();
+    } catch (closeRedisErr) {
+      logger.error(LOG_ACTIONS.SYSTEM.APPLICATION_SHUTDOWN, {
+        status: LOG_STATUSES.FAILED,
+        operation: "close_redis",
+        reason: closeRedisErr.code || "SHUTDOWN_FAILED",
+        message: closeRedisErr.message,
+      });
+    }
 
     try {
       await pool.end();

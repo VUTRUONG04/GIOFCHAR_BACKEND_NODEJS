@@ -11,6 +11,7 @@ export function validateEnv() {
     "DB_NAME",
     "ACCESS_TOKEN_SECRET",
     "REFRESH_TOKEN_SECRET",
+    "REDIS_URL",
   ];
 
   const optionalIntegrations = [
@@ -32,7 +33,9 @@ export function validateEnv() {
       missingKeys: missingRequired,
       message: errorMsg,
     });
-    console.error(`\n❌ CRITICAL STARTUP ERROR:\n${errorMsg}\n👉 Tip: Copy .env_example to .env and configure mandatory values.\n`);
+    console.error(
+      `\n❌ CRITICAL STARTUP ERROR:\n${errorMsg}\n👉 Tip: Copy .env_example to .env and configure mandatory values.\n`,
+    );
     process.exit(1);
   }
 
@@ -62,12 +65,20 @@ export function validateEnv() {
   }
 
   // Check optional external service dependencies
-  const missingOptional = optionalIntegrations.filter((item) => !process.env[item.name]);
+  const missingOptional = optionalIntegrations.filter(
+    (item) => !process.env[item.name],
+  );
   if (missingOptional.length > 0) {
-    const missingFeatureNames = [...new Set(missingOptional.map((i) => i.feature))];
-    console.warn(`\n⚠️  ENVIRONMENT WARNING: Some optional external service keys are not configured.`);
+    const missingFeatureNames = [
+      ...new Set(missingOptional.map((i) => i.feature)),
+    ];
+    console.warn(
+      `\n⚠️  ENVIRONMENT WARNING: Some optional external service keys are not configured.`,
+    );
     console.warn(`   Affected features: ${missingFeatureNames.join(", ")}`);
-    console.warn(`   Missing keys: ${missingOptional.map((i) => i.name).join(", ")}\n`);
+    console.warn(
+      `   Missing keys: ${missingOptional.map((i) => i.name).join(", ")}\n`,
+    );
   } else {
     console.log("✅ All environment variables validated successfully.");
   }
