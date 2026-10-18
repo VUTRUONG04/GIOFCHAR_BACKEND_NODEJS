@@ -11,6 +11,7 @@ describe("validateEnv", () => {
     vi.stubEnv("REFRESH_TOKEN_SECRET", "test-refresh-secret");
     vi.stubEnv("RESEND_API_KEY", "");
     vi.stubEnv("EMAIL_FROM", "");
+    vi.stubEnv("REDIS_URL", "redis://localhost:6379");
     vi.spyOn(process, "exit").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
