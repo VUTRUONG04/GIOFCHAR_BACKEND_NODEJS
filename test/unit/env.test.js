@@ -9,6 +9,7 @@ describe("validateEnv", () => {
     vi.stubEnv("DB_NAME", "giofchar_test");
     vi.stubEnv("ACCESS_TOKEN_SECRET", "test-access-secret");
     vi.stubEnv("REFRESH_TOKEN_SECRET", "test-refresh-secret");
+    vi.stubEnv("RATE_LIMIT_HASH_SECRET", "test-rate-limit-hash-secret");
     vi.stubEnv("RESEND_API_KEY", "");
     vi.stubEnv("EMAIL_FROM", "");
     vi.stubEnv("REDIS_URL", "redis://localhost:6379");
@@ -31,6 +32,14 @@ describe("validateEnv", () => {
 
   it("rejects an incomplete email configuration", () => {
     vi.stubEnv("RESEND_API_KEY", "test-resend-key");
+
+    validateEnv();
+
+    expect(process.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("requires a non-empty rate-limit hash secret", () => {
+    vi.stubEnv("RATE_LIMIT_HASH_SECRET", " ");
 
     validateEnv();
 

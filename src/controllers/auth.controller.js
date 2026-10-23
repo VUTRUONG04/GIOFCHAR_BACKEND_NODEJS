@@ -11,8 +11,6 @@ import userService from "../services/user.service.js";
 
 export const registerApi = asyncHandler(async (req, res) => {
   const { userName, email, phone, password, address } = req.body;
-  if (!userName || !email || !phone || !password)
-    throw new BadRequestError("Missing field");
   const guestToken = req.headers["x-guest-token"];
 
   const result = await authService.register(
@@ -31,7 +29,6 @@ export const registerApi = asyncHandler(async (req, res) => {
 
 export const loginApi = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password) throw new BadRequestError("Missing field");
   const guestToken = req.headers["x-guest-token"];
 
   const result = await authService.login(email, password, guestToken);

@@ -4,8 +4,16 @@ import request from "supertest";
 import app from "../../src/app.js";
 import authService from "../../src/services/auth.service.js";
 import cartService from "../../src/services/cart.service.js";
+import { checkSlidingWindowLimit } from "../../src/services/rateLimit.service.js";
 
-// Mock authService và cartService
+vi.mock("../../src/services/rateLimit.service.js", () => ({
+  checkSlidingWindowLimit: vi.fn().mockResolvedValue({
+    allowed: true,
+    requestCount: 1,
+    retryAfterMs: 0,
+  }),
+}));
+
 vi.mock("../../src/services/auth.service.js", () => ({
   default: {
     login: vi.fn(),
@@ -25,10 +33,17 @@ describe("POST /api/auth/login (Cart Merge Integration Tests)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    checkSlidingWindowLimit.mockResolvedValue({
+      allowed: true,
+      requestCount: 1,
+      retryAfterMs: 0,
+    });
+    vi.stubEnv("RATE_LIMIT_HASH_SECRET", "test-rate-limit-hash-secret");
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("returns 200 OK and mergeCart: 'success' when login is valid and guestToken is provided", async () => {
@@ -58,7 +73,7 @@ describe("POST /api/auth/login (Cart Merge Integration Tests)", () => {
     expect(authService.login).toHaveBeenCalledWith(
       MOCK_EMAIL,
       MOCK_PASSWORD,
-      MOCK_GUEST_TOKEN
+      MOCK_GUEST_TOKEN,
     );
   });
 

@@ -12,6 +12,7 @@ export function validateEnv() {
     "ACCESS_TOKEN_SECRET",
     "REFRESH_TOKEN_SECRET",
     "REDIS_URL",
+    "RATE_LIMIT_HASH_SECRET",
   ];
 
   const optionalIntegrations = [
@@ -23,7 +24,11 @@ export function validateEnv() {
     { name: "VNP_HASH_SECRET", feature: "VNPay Online Payment" },
   ];
 
-  const missingRequired = requiredEnv.filter((key) => !process.env[key]);
+  const missingRequired = requiredEnv.filter(
+    (key) =>
+      typeof process.env[key] !== "string" ||
+      process.env[key].trim() === "",
+  );
 
   if (missingRequired.length > 0) {
     const errorMsg = `Missing mandatory environment variables: ${missingRequired.join(", ")}. Please check your .env file.`;

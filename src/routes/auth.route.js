@@ -9,12 +9,29 @@ import {
   refreshTokenController,
   registerApi,
 } from "../controllers/auth.controller.js";
-import { asyncHandler } from "../errors/errorHandler.js";
+import {
+  loginByEmailLimiter,
+  loginByIpLimiter,
+  registerByIpLimiter,
+} from "../middlewares/rateLimitLimiters.middleware.js";
+import { loginSchema, registerSchema } from "../validators/auth.validator.js";
+import { validate } from "../middlewares/validate.middleware.js";
 
 router.post("/logout", logoutController);
 router.post("/refresh", refreshTokenController);
 router.get("/account", requireAuth, getAccount);
-router.post("/login", loginApi);
-router.post("/register", registerApi);
+router.post(
+  "/login",
+  loginByIpLimiter,
+  validate(loginSchema),
+  loginByEmailLimiter,
+  loginApi,
+);
 
+router.post(
+  "/register",
+  registerByIpLimiter,
+  validate(registerSchema),
+  registerApi,
+);
 export default router;
