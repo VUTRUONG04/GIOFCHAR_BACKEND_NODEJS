@@ -2,6 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import jwt from "jsonwebtoken";
 import request from "supertest";
 
+vi.mock("../../src/services/rateLimit.service.js", () => ({
+  checkSlidingWindowLimit: async () => ({
+    allowed: true,
+    requestCount: 1,
+    retryAfterMs: 0,
+  }),
+}));
+
 vi.mock("../../src/services/emailJob.service.js", () => ({
   default: {
     listEmailJobs: vi.fn(),

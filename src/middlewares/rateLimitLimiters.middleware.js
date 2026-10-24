@@ -12,3 +12,27 @@ export const loginByEmailLimiter = createRateLimitMiddleware(
 export const registerByIpLimiter = createRateLimitMiddleware(
   rateLimitPolicies.registerByIp,
 );
+
+export const guestInitByIpLimiter = createRateLimitMiddleware(
+  rateLimitPolicies.guestInitByIp,
+);
+
+export const codOrderByIpLimiter = createRateLimitMiddleware(
+  rateLimitPolicies.codOrderByIp,
+);
+
+export const cartMutationByIpLimiter = createRateLimitMiddleware(
+  rateLimitPolicies.cartMutationByIp,
+);
+
+export const foodImageUploadByIpLimiter = createRateLimitMiddleware(
+  rateLimitPolicies.foodImageUploadByIp,
+);
+
+export const paymentStatusByIpLimiter = createRateLimitMiddleware(
+  rateLimitPolicies.paymentStatusByIp,
+);
+
+export const globalApiLimiter = createRateLimitMiddleware(
+  rateLimitPolicies.globalApiByIp,
+);

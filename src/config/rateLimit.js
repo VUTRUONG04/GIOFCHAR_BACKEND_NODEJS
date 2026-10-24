@@ -62,4 +62,46 @@ export const rateLimitPolicies = {
     maxCountRequest: 10,
     keyGenerator: getClientIp,
   },
+
+  guestInitByIp: {
+    keyPrefix: "guest:init:ip",
+    windowMs: 60 * 60 * 1000,
+    maxCountRequest: 15,
+    keyGenerator: getClientIp,
+  },
+
+  codOrderByIp: {
+    keyPrefix: "order:cod:ip",
+    windowMs: 15 * 60 * 1000,
+    maxCountRequest: 10,
+    keyGenerator: getClientIp,
+  },
+
+  cartMutationByIp: {
+    keyPrefix: "cart:mutation:ip",
+    windowMs: 60 * 1000,
+    maxCountRequest: 60,
+    keyGenerator: getClientIp,
+  },
+
+  foodImageUploadByIp: {
+    keyPrefix: "food:image-upload:ip",
+    windowMs: 60 * 60 * 1000,
+    maxCountRequest: 20,
+    keyGenerator: getClientIp,
+  },
+
+  paymentStatusByIp: {
+    keyPrefix: "order:payment-status:ip",
+    windowMs: 60 * 1000,
+    maxCountRequest: 30,
+    keyGenerator: getClientIp,
+  },
+
+  globalApiByIp: {
+    keyPrefix: "global:api:ip",
+    windowMs: 60 * 1000,
+    maxCountRequest: 120,
+    keyGenerator: getClientIp,
+  },
 };

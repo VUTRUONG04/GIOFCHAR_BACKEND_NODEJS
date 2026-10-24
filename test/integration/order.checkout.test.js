@@ -5,8 +5,17 @@ import request from "supertest";
 import app from "../../src/app.js";
 import cartService from "../../src/services/cart.service.js";
 import orderService from "../../src/services/order.service.js";
+import { checkSlidingWindowLimit } from "../../src/services/rateLimit.service.js";
 
 // Mock các Service để cô lập tầng Route/Controller/Middleware
+vi.mock("../../src/services/rateLimit.service.js", () => ({
+    checkSlidingWindowLimit: vi.fn().mockResolvedValue({
+        allowed: true,
+        requestCount: 1,
+        retryAfterMs: 0,
+    }),
+}));
+
 vi.mock("../../src/services/cart.service.js", () => ({
     default: {
         withCart: vi.fn(),
@@ -46,6 +55,11 @@ describe("POST /api/orders/user/cod (Checkout Integration using Supertest)", () 
 
     beforeEach(() => {
         vi.clearAllMocks();
+        checkSlidingWindowLimit.mockResolvedValue({
+            allowed: true,
+            requestCount: 1,
+            retryAfterMs: 0,
+        });
         
         // Mặc định cho withCart thực thi callback handler truyền vào
         cartService.withCart.mockImplementation(async (context, handler, options) => {

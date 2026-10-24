@@ -11,6 +11,10 @@ import orderController from "../controllers/order.controller.js";
 
 import { checkAdmin } from "../middlewares/user.middleware.js";
 import { checkOrderByOrderCode } from "../middlewares/order.middleware.js";
+import {
+  codOrderByIpLimiter,
+  paymentStatusByIpLimiter,
+} from "../middlewares/rateLimitLimiters.middleware.js";
 
 // Xóa order dành cho admin
 router.delete(
@@ -40,6 +44,7 @@ router.patch(
 router.post(
   "/user/cod",
   requireAuth,
+  codOrderByIpLimiter,
   orderController.createOrder,
 );
 
@@ -47,6 +52,7 @@ router.post(
 router.post(
   "/guest/cod",
   optionalAuth,
+  codOrderByIpLimiter,
   orderController.createOrder,
 );
 
@@ -74,6 +80,7 @@ router.get(
 );
 router.get(
   "/payment-status/by-code/:orderCode",
+  paymentStatusByIpLimiter,
   checkOrderByOrderCode,
   orderController.getPaymentStatus,
 );

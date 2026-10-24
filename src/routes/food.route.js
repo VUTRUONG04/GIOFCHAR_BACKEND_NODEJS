@@ -13,6 +13,7 @@ import foodController from "../controllers/food.controller.js";
 
 import { checkFoodExists } from "../middlewares/checkFood.js";
 import { asyncHandler } from "../errors/errorHandler.js";
+import { foodImageUploadByIpLimiter } from "../middlewares/rateLimitLimiters.middleware.js";
 import {
   createVariantController,
   getVariantByFoodController,
@@ -28,6 +29,7 @@ router.put(
   "/:foodId",
   requireAuth,
   checkAdmin,
+  foodImageUploadByIpLimiter,
 
   upload.single("imageFood"),
   uploadToCloudinary,
@@ -41,6 +43,7 @@ router.post(
   "/",
   requireAuth,
   checkAdmin,
+  foodImageUploadByIpLimiter,
   upload.single("imageFood"),
   uploadToCloudinary,
   cleanupCloudinary, // xóa ảnh nếu có lỗi xảy ra khi res.json() ở 2 controller sau

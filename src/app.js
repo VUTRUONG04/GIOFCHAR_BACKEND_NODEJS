@@ -20,6 +20,7 @@ import adminRoutes from "./routes/admin.route.js";
 import { checkOrigin } from "./middlewares/session.middleware.js";
 import { errorHandler } from "./errors/errorHandler.js";
 import { requestLogger } from "./middlewares/request.middleware.js";
+import { globalApiLimiter } from "./middlewares/rateLimitLimiters.middleware.js";
 
 const app = express();
 
@@ -58,6 +59,8 @@ app.use(
     sameSite: "lax",
   }),
 );
+
+app.use("/api", globalApiLimiter);
 
 app.use("/api/guest", guestRoutes);
 app.use("/api/variants", variantRoutes);
